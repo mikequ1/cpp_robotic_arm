@@ -1,0 +1,6 @@
+[submodule "libfranka"]
+	path = libfranka
+	url = https://github.com/frankaemika/libfranka.git
+[submodule "liborl"]
+	path = liborl
+	url = https://github.com/marcbone/liborl.git
