@@ -4,3 +4,4 @@
 [submodule "liborl"]
 	path = liborl
 	url = https://github.com/marcbone/liborl.git
+	ignore = dirty
