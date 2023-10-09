@@ -1,8 +1,8 @@
 CC=gcc
 CXX=g++
 
-DIR = /home/c3po/mike
-BUILD_DIR = /home/c3po/mike/build
+DIR = /home/c3po/cpp_robotic_arm
+BUILD_DIR = /home/c3po/cpp_robotic_arm/build
 
 INCLUDE = 	-I$(DIR)/include \
 			-I$(DIR)/libfranka/include \
@@ -13,7 +13,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so
 
-TARGET = bezier_test
+TARGET = tcp_ipc_test
 
 #==============================================#
 #                    MAIN                      #
@@ -74,6 +74,14 @@ bezier_test: bezier_test.o $(SHARED_LIBRARIES)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 bezier_test.o: $(DIR)/tests/bezier_test.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+endif
+
+ifeq ($(TARGET),tcp_ipc_test)
+tcp_ipc_test: tcp_ipc_test.o $(SHARED_LIBRARIES)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+tcp_ipc_test.o: $(DIR)/tests/tcp_ipc_test.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif
 
