@@ -2,6 +2,7 @@
 
 #include "GamePad.h"
 #include <string>
+#include <array>
 #include <franka/robot.h>
 
 class Arm
@@ -26,6 +27,13 @@ public:
      *
      */
     void controlvel();
+
+    /**
+     * @brief Get the pose object
+     * 
+     * @param pose Array representing the current pose of the robot
+     */
+    void get_pose(std::array<double, 16>& pose);
 
     bool isFinished();
 

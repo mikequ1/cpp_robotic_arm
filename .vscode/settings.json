@@ -63,6 +63,8 @@
         "typeinfo": "cpp",
         "variant": "cpp",
         "forward_list": "cpp",
-        "future": "cpp"
+        "future": "cpp",
+        "regex": "cpp",
+        "shared_mutex": "cpp"
     }
 }

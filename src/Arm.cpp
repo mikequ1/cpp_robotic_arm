@@ -324,6 +324,11 @@ void Arm::controlvel(){
     });
 }
 
+void Arm::get_pose(std::array<double, 16>& pose) {
+    franka::RobotState state = m_robot->readOnce();
+    pose = state.O_T_EE_c;
+}
+
 bool Arm::isFinished()
 {
     return m_finished;

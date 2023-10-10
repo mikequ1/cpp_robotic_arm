@@ -1,6 +1,7 @@
 #include "GamePad.h"
 #include "Arm.h"
 #include "Comms.h"
+#include "rapidjson/rapidjson.h"
 
 #include <string>
 

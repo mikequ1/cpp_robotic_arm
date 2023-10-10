@@ -13,7 +13,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so
 
-TARGET = eepos_traj_test
+TARGET = get_arm_status
 
 #==============================================#
 #                    MAIN                      #
