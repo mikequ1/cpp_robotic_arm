@@ -40,6 +40,8 @@ int main(int argc, char** argv) {
     std::array<double, 16> init_NE_T_EE = init_state.NE_T_EE;
     std::array<double, 16> init_O_T_EE = init_state.O_T_EE;
     std::array<double, 7> init_q = init_state.q;
+    std::array<double, 7> init_dq = init_state.dq;
+
     cout << "NE_T_EE" << endl;
     for (int i = 0; i < 16; i++) {
       cout << init_NE_T_EE[i] << " ";
@@ -48,14 +50,22 @@ int main(int argc, char** argv) {
 
     rapidjson::Document document;
     document.SetObject();
-    rapidjson::Value dataArray(rapidjson::kArrayType);
+    rapidjson::Value poseArray(rapidjson::kArrayType);
+    rapidjson::Value jpArray(rapidjson::kArrayType);
+    rapidjson::Value jvArray(rapidjson::kArrayType);
     rapidjson::Document::AllocatorType& allocator = document.GetAllocator();
-    cout << "O_T_EE" << endl;
     for (int i = 0; i < 16; i++) {
-      dataArray.PushBack(init_O_T_EE[i], allocator);
+      poseArray.PushBack(std::round(init_O_T_EE[i] * 1000.0) / 1000.0, allocator);
       // cout << init_O_T_EE[i] << " ";
     }
-    document.AddMember("pose", dataArray, allocator); 
+    for (int i = 0; i < 7; i++) {
+      jpArray.PushBack(std::round(init_q[i] * 1000.0) / 1000.0, allocator);
+      jvArray.PushBack(std::round(init_dq[i] * 1000.0) / 1000.0, allocator);
+      // cout << init_q[i] << " ";
+    }
+    document.AddMember("pose", poseArray, allocator); 
+    document.AddMember("joint_pos", jpArray, allocator); 
+    document.AddMember("joint_vel", jvArray, allocator); 
     rapidjson::StringBuffer strbuf;
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);
