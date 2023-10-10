@@ -1,5 +1,6 @@
 #include "GamePad.h"
 #include "Arm.h"
+#include "Comms.h"
 
 #include <string>
 
@@ -13,10 +14,16 @@ int main()
     gp->startThread();
 
     // initialize franka robot
-    Arm *arm = new Arm(ARM_ADDR, gp);
+    // Arm *arm = new Arm(ARM_ADDR, gp);
     // arm->controlfuncs();
     // arm->controldirect();
-    arm->controlvel();
+    // arm->controlvel();
+
+    Comms *server = new Comms(5555);
+    server->receive_data();
+    std::string str("hi hi hi");
+    server->send_data(str.c_str());
+
 
     return 0;
 }

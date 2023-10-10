@@ -13,7 +13,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so
 
-TARGET = tcp_ipc_test
+TARGET = eepos_traj_test
 
 #==============================================#
 #                    MAIN                      #
@@ -82,6 +82,14 @@ tcp_ipc_test: tcp_ipc_test.o $(SHARED_LIBRARIES)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 tcp_ipc_test.o: $(DIR)/tests/tcp_ipc_test.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+endif
+
+ifeq ($(TARGET),eepos_traj_test)
+eepos_traj_test: eepos_traj_test.o $(SHARED_LIBRARIES)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+eepos_traj_test.o: $(DIR)/tests/eepos_traj_test.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif
 
