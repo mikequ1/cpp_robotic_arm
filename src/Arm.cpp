@@ -5,34 +5,26 @@
 #include <vector>
 
 #include <franka/exception.h>
+#include <liborl/liborl.h>
 
 #include "examples_common.h"
 
 using namespace std;
 
-Arm::Arm(const std::string &addr, GamePad *gp)
+Arm::Arm(const std::string &addr, GamePad *gp, Comms *c)
 {
-    m_robot = new franka::Robot(addr);
+    m_robot = new robot(addr);
     m_gp = gp;
+    m_c = c;
     m_finished = 0;
-    setDefaultBehavior(*m_robot);
 
     std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-    MotionGenerator motion_generator(0.5, q_goal);
     std::cout << "WARNING: This program will move the robot! "
               << "Please make sure to have the user stop button at hand!" << std::endl
               << "Press Enter to continue..." << std::endl;
     std::cin.ignore();
-    m_robot->control(motion_generator);
+    m_robot->joint_motion(q_goal, 0.2);
     std::cout << "Finished moving to initial joint configuration." << std::endl;
-
-    // Set additional parameters always before the control loop, NEVER in the control loop!
-    // Set collision behavior.
-    m_robot->setCollisionBehavior(
-        {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}}, {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}},
-        {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}}, {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}},
-        {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}}, {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}},
-        {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}}, {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}});
 }
 
 void Arm::controlfuncs()
@@ -43,7 +35,7 @@ void Arm::controlfuncs()
     double rest = 9999.0;   //
     int ready = 1;
     GamePad *gp = m_gp;
-    m_robot->control([&time, &initial_pose, &gp, &thistrack, &ready, &rest](const franka::RobotState &robot_state,
+    m_robot->get_franka_robot().control([&time, &initial_pose, &gp, &thistrack, &ready, &rest](const franka::RobotState &robot_state,
                                                                             franka::Duration period) -> franka::CartesianPose
                      {
         time += period.toSec();
@@ -166,7 +158,7 @@ void Arm::controlvel(){
     int status = 1;
 
     GamePad *gp = m_gp;
-    m_robot->control([=, &status, &time, &thistrack](const franka::RobotState&,
+    m_robot->get_franka_robot().control([=, &status, &time, &thistrack](const franka::RobotState&,
                              franka::Duration period) -> franka::CartesianVelocities {
         
         int bs = gp->getButtonState();
@@ -325,8 +317,25 @@ void Arm::controlvel(){
 }
 
 void Arm::get_pose(std::array<double, 16>& pose) {
-    franka::RobotState state = m_robot->readOnce();
+    franka::RobotState state = m_robot->get_franka_robot().readOnce();
     pose = state.O_T_EE_c;
+
+    rapidjson::Document document;
+    document.SetObject();
+    rapidjson::Value poseArray(rapidjson::kArrayType);
+    for (int i = 0; i < 16; i++) {
+        poseArray.PushBack(std::round(pose[i] * 1000.0) / 1000.0, allocator);
+    }
+    document.AddMember("pose", poseArray, allocator); 
+    rapidjson::StringBuffer strbuf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+    document.Accept(writer);
+
+    m_c->send_data(strbuf.GetString().c_str());
+}
+
+void Arm::goto_gripper(double dest) {
+
 }
 
 bool Arm::isFinished()
