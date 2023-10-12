@@ -43,6 +43,7 @@ Comms::Comms(int port) {
 }
 
 Comms::~Comms() {
+    printf("Destructing Comms socket");
     close(m_socket); 
     shutdown(m_server_fd, SHUT_RDWR); 
 }

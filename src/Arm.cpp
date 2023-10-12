@@ -5,7 +5,10 @@
 #include <vector>
 
 #include <franka/exception.h>
-#include <liborl/liborl.h>
+#include <liborl/SpeedProfile.h>
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
 
 #include "examples_common.h"
 
@@ -13,7 +16,7 @@ using namespace std;
 
 Arm::Arm(const std::string &addr, GamePad *gp, Comms *c)
 {
-    m_robot = new robot(addr);
+    m_robot = new orl::Robot(addr);
     m_gp = gp;
     m_c = c;
     m_finished = 0;
@@ -36,8 +39,8 @@ void Arm::controlfuncs()
     int ready = 1;
     GamePad *gp = m_gp;
     m_robot->get_franka_robot().control([&time, &initial_pose, &gp, &thistrack, &ready, &rest](const franka::RobotState &robot_state,
-                                                                            franka::Duration period) -> franka::CartesianPose
-                     {
+                                                                                               franka::Duration period) -> franka::CartesianPose
+                                        {
         time += period.toSec();
         thistrack += period.toSec();
 
@@ -147,27 +150,34 @@ void Arm::controlfuncs()
         return new_pose; });
 }
 
-
-void Arm::controlvel(){
+void Arm::controlvel()
+{
     double time_max = 0.2;
     double v_max = 0.1;
     double angle = M_PI / 4.0;
     double time = 0.0;
     double thistrack = 0.0;
-    double smooth_startstop = 0.0;
     int status = 1;
 
     GamePad *gp = m_gp;
-    m_robot->get_franka_robot().control([=, &status, &time, &thistrack](const franka::RobotState&,
-                             franka::Duration period) -> franka::CartesianVelocities {
+    this->get_gripper_width();
+    this->goto_gripper(0.08);
+    this->get_gripper_width();
+    this->goto_gripper(0.01);
+    this->goto_pose(0.65, 0.0, 0.2, 3);
+    this->goto_pose_delta(-0.2, 0, 0.1, 2);
+    m_robot->get_franka_robot().control([=, &status, &time, &thistrack](const franka::RobotState &robot_state,
+                                                                        franka::Duration period) -> franka::CartesianVelocities
+                                        {
         
         int bs = gp->getButtonState();
 
         time += period.toSec();
         thistrack += period.toSec();
 
-        cout << status << endl;
+        this->get_pose(robot_state.O_T_EE_c);
 
+        cout << status << endl;
         franka::CartesianVelocities output = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
         if (bs == 8) {
             if (status == 1){
@@ -312,30 +322,68 @@ void Arm::controlvel(){
             std::cout << std::endl << "Finished motion, shutting down example" << std::endl;
             return franka::MotionFinished(output);
         }
-        return output;
-    });
+        return output; });
 }
 
-void Arm::get_pose(std::array<double, 16>& pose) {
+void Arm::get_pose()
+{
     franka::RobotState state = m_robot->get_franka_robot().readOnce();
-    pose = state.O_T_EE_c;
+    std::array<double, 16> pose = state.O_T_EE;
+    this->get_pose(pose);
+}
 
+void Arm::get_pose(std::array<double, 16> pose)
+{
     rapidjson::Document document;
     document.SetObject();
     rapidjson::Value poseArray(rapidjson::kArrayType);
-    for (int i = 0; i < 16; i++) {
+    rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
+    for (int i = 0; i < 16; i++)
+    {
         poseArray.PushBack(std::round(pose[i] * 1000.0) / 1000.0, allocator);
     }
-    document.AddMember("pose", poseArray, allocator); 
+    document.AddMember("pose", poseArray, allocator);
     rapidjson::StringBuffer strbuf;
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);
 
-    m_c->send_data(strbuf.GetString().c_str());
+    m_c->send_data(strbuf.GetString());
 }
 
-void Arm::goto_gripper(double dest) {
+void Arm::get_gripper_width()
+{
+    double width = m_robot->get_franka_gripper().readOnce().width;
+    rapidjson::Document document;
+    document.SetObject();
+    rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
+    document.AddMember("gripper_width", width, allocator);
+    rapidjson::StringBuffer strbuf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+    document.Accept(writer);
 
+    m_c->send_data(strbuf.GetString());
+}
+
+void Arm::goto_gripper(double dest)
+{
+    m_robot->get_franka_gripper().move(dest, 0.1);
+}
+
+void Arm::goto_pose(double x, double y, double z, double duration)
+{
+    m_robot->absolute_cart_motion(x, y, z, duration);
+}
+
+void Arm::goto_pose(std::array<double, 16> pose, double duration)
+{
+    m_robot->absolute_cart_motion(pose[12], pose[13], pose[14], duration);
+}
+
+void Arm::goto_pose_delta(double dx, double dy, double dz, double duration)
+{
+    auto tcp_motion = orl::PoseGenerators::RelativeMotion(orl::Position(dx, dy, dz), Frame::RobotTCP);
+    orl::apply_speed_profile(tcp_motion);
+    m_robot->move_cartesian(tcp_motion, duration);
 }
 
 bool Arm::isFinished()

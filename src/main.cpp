@@ -14,17 +14,16 @@ int main()
     GamePad *gp = new GamePad(DEVICE_PATH);
     gp->startThread();
 
-    // initialize franka robot
-    // Arm *arm = new Arm(ARM_ADDR, gp);
-    // arm->controlfuncs();
-    // arm->controldirect();
-    // arm->controlvel();
-
     Comms *server = new Comms(5555);
-    server->receive_data();
-    std::string str("hi hi hi");
+    std::string str("connection successful");
     server->send_data(str.c_str());
 
+    // initialize franka robot
+    Arm *arm = new Arm(ARM_ADDR, gp, server);
+    arm->controlvel();
+
+    delete arm;
+    delete server;
 
     return 0;
 }

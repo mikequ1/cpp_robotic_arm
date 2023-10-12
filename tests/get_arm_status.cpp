@@ -7,9 +7,9 @@
 #include <franka/exception.h>
 #include <franka/robot.h>
 
- #include "rapidjson/document.h"
- #include "rapidjson/writer.h"
- #include "rapidjson/stringbuffer.h"
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
 
 #include "examples_common.h"
 
