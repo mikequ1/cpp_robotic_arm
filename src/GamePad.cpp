@@ -7,10 +7,15 @@
 #include <unistd.h>
 #include <linux/joystick.h>
 
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
+
 using namespace std;
 
-GamePad::GamePad(const char *device)
+GamePad::GamePad(const char *device, Comms* c)
 {
+    m_c = c;
     cout << "GamePad initialized" << endl;
     m_gp = open(device, O_RDONLY);
 
@@ -77,4 +82,17 @@ size_t GamePad::getAxisState(struct js_event *event, struct axis_state axes[3])
 int GamePad::getButtonState()
 {
     return m_bs;
+}
+
+void GamePad::get_action()
+{
+    rapidjson::Document document;
+    document.SetObject();
+    rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
+    document.AddMember("action", m_bs, allocator);
+    rapidjson::StringBuffer strbuf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+    document.Accept(writer);
+
+    m_c->send_data(strbuf.GetString());
 }

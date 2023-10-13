@@ -1,5 +1,8 @@
 #pragma once
 
+#include <queue>
+#include <thread>
+
 class Comms {
 public:
     /**
@@ -14,12 +17,22 @@ public:
 
     void send_data(const char* payload);
 
-    void receive_data();
+    void startThread();
+    void receiveLoop();
+
+    int receive_data(char* buffer);
+
+    std::queue<char*>& get_q();
 
 private:
     /// @brief File descriptor of the socket server
     int m_server_fd;
     /// @brief socket
     int m_socket;
+    /// @brief queue of incoming communications
+    std::queue<char*> m_q;
+
+    std::thread mThread;
+    
 
 };

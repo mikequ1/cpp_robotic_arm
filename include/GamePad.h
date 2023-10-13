@@ -3,6 +3,8 @@
 #include <thread>
 #include <mutex>
 
+#include "Comms.h"
+
 struct axis_state
 {
     short x, y;
@@ -16,7 +18,7 @@ public:
      *
      * @param device Device path e.g. /dev/input/js0
      */
-    GamePad(const char *device);
+    GamePad(const char *device, Comms* c);
 
     /// @brief Destructor
     virtual ~GamePad();
@@ -34,6 +36,8 @@ public:
     void run();
 
     int getButtonState();
+
+    void get_action();
 
 private:
     /**
@@ -54,6 +58,8 @@ private:
      */
     size_t getAxisState(struct js_event *event, struct axis_state axes[3]);
 
+    /// @brief socket comms object
+    Comms* m_c;
     /// @brief Abstraction of a GamePad device
     int m_gp;
     /// @brief Button State represented by binary (XABY = [0000]) 1=pressed, 0=released

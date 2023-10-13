@@ -52,8 +52,25 @@ void Comms::send_data(const char* payload) {
     send(m_socket, payload, strlen(payload), 0); 
 }
 
-void Comms::receive_data() {
-    char buffer[1024] = { 0 }; 
-    read(m_socket, buffer, 1024);
-    printf(buffer);
+void Comms::startThread() {
+    mThread = std::thread(Comms::receiveLoop, this);
+}
+
+void Comms::receiveLoop() {
+    while (true) {
+        char buffer[1024] = { 0 }; 
+        int val = read(m_socket, buffer, 1024);
+        if (val > 0)
+            m_q.push(buffer);
+    }
+}
+
+int Comms::receive_data(char* buffer) {
+    int val = read(m_socket, buffer, 1024);
+    printf("read comms line: %d - %s", val, buffer);
+    return val;
+}
+
+std::queue<char*>& Comms::get_q() {
+    return m_q;
 }

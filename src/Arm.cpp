@@ -152,7 +152,7 @@ void Arm::controlfuncs()
 
 void Arm::controlvel()
 {
-    double time_max = 0.2;
+    double time_max = 0.3;
     double v_max = 0.1;
     double angle = M_PI / 4.0;
     double time = 0.0;
