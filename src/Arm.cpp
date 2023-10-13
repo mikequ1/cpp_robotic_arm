@@ -347,6 +347,7 @@ void Arm::get_pose(std::array<double, 16> pose)
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);
 
+    printf(strbuf.GetString());
     m_c->send_data(strbuf.GetString());
 }
 

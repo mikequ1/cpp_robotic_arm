@@ -27,13 +27,17 @@ int main()
 
 
     //TODO: instead of reading incoming TCP comms in the main thread, read in new thread and push to queue
-    while (server->get_q().size() != 0) {
-        std::string buffer = server->get_q().pop();
-        printf(buffer);
-        rapidjson::Document document;
-        document.Parse(buffer.c_str());
-        if (document["func"] == "pose") {
-            arm->get_pose();
+    while (true) {
+        if (server->get_q().size() != 0) {
+            std::string buffer;
+            if (server->get_command(buffer) == -1)
+                continue;
+            rapidjson::Document document;
+            document.Parse(buffer.c_str());
+            if (document["func"] == "get_pose") {
+                std::cout << buffer << std::endl;
+                arm->get_pose();
+            }
         }
     }
 

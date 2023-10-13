@@ -2,6 +2,7 @@
 
 #include <queue>
 #include <thread>
+#include <mutex>
 
 class Comms {
 public:
@@ -34,6 +35,8 @@ public:
      */
     void receiveLoop();
 
+    bool get_command(std::string& buffer);
+
     /**
      * @brief receive data from the other end of the TCP socket
      * 
@@ -42,7 +45,7 @@ public:
      */
     int receive_data(char* buffer);
 
-    std::queue<char*>& get_q();
+    std::queue<std::string>& get_q();
 
 private:
     /// @brief File descriptor of the socket server
@@ -50,9 +53,13 @@ private:
     /// @brief socket
     int m_socket;
     /// @brief queue of incoming communications
-    std::queue<char*> m_q;
+    std::queue<std::string> m_q;
 
     std::thread mThread;
+
+    std::mutex mMutex;
+
+    std::mutex qMutex;
     
 
 };

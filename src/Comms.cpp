@@ -7,6 +7,8 @@
 #include <sys/socket.h> 
 #include <unistd.h> 
 
+using namespace std;
+
 Comms::Comms(int port) {
     struct sockaddr_in address; 
     int addrlen = sizeof(address); 
@@ -43,34 +45,46 @@ Comms::Comms(int port) {
 }
 
 Comms::~Comms() {
-    printf("Destructing Comms socket");
+    mThread.join();
     close(m_socket); 
     shutdown(m_server_fd, SHUT_RDWR); 
 }
 
 void Comms::send_data(const char* payload) {
+    lock_guard<mutex> lock(mMutex);
     send(m_socket, payload, strlen(payload), 0); 
 }
 
 void Comms::startThread() {
-    mThread = std::thread(Comms::receiveLoop, this);
+    mThread = thread(&Comms::receiveLoop, this);
 }
 
 void Comms::receiveLoop() {
     while (true) {
         char buffer[1024] = { 0 }; 
         int val = read(m_socket, buffer, 1024);
-        if (val > 0)
-            m_q.push(std::string(buffer));
+        if (val > 0) {
+            lock_guard<mutex> lock(qMutex);
+            m_q.push(string(buffer));
+        }
     }
+}
+
+bool Comms::get_command(string& buffer) {
+    lock_guard<mutex> lock(qMutex);
+    if (m_q.size() == 0) {
+        return -1;
+    }
+    buffer = m_q.front();
+    m_q.pop();
+    return 0;
 }
 
 int Comms::receive_data(char* buffer) {
     int val = read(m_socket, buffer, 1024);
-    printf("read comms line: %d - %s", val, buffer);
     return val;
 }
 
-std::queue<char*>& Comms::get_q() {
+queue<string>& Comms::get_q() {
     return m_q;
 }
