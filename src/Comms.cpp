@@ -61,7 +61,7 @@ void Comms::receiveLoop() {
         char buffer[1024] = { 0 }; 
         int val = read(m_socket, buffer, 1024);
         if (val > 0)
-            m_q.push(buffer);
+            m_q.push(std::string(buffer));
     }
 }
 
