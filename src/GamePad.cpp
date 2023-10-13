@@ -50,7 +50,6 @@ void GamePad::run()
             lock_guard<mutex> lock(mMutex);
             // printf("Button %u %s\n", event.number, event.value ? "pressed" : "released");
             m_bs += 2 * (event.value - 0.5) * pow(2, event.number);
-            cout << m_bs << endl;
         }
         fflush(stdout);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -86,10 +85,11 @@ int GamePad::getButtonState()
 
 void GamePad::get_action()
 {
+    rapidjson::Value action(m_bs);
     rapidjson::Document document;
     document.SetObject();
     rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
-    document.AddMember("action", m_bs, allocator);
+    document.AddMember("action", action, allocator);
     rapidjson::StringBuffer strbuf;
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);

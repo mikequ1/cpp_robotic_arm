@@ -28,16 +28,37 @@ int main()
 
     //TODO: instead of reading incoming TCP comms in the main thread, read in new thread and push to queue
     while (true) {
-        if (server->get_q().size() != 0) {
-            std::string buffer;
-            if (server->get_command(buffer) == -1)
-                continue;
-            rapidjson::Document document;
-            document.Parse(buffer.c_str());
-            if (document["func"] == "get_pose") {
-                std::cout << buffer << std::endl;
-                arm->get_pose();
-            }
+        std::string buffer;
+        if (server->get_command(buffer) == false)
+            continue;
+        rapidjson::Document document;
+        document.Parse(buffer.c_str());
+        if (document["func"] == "get_pose") {
+            arm->get_pose();
+        }
+        if (document["func"] == "goto_pose") {
+            double x = document["x"].GetDouble();
+            double y = document["y"].GetDouble();
+            double z = document["z"].GetDouble();
+            double duration = document["duration"].GetDouble();
+            arm->goto_pose(x,y,z,duration);
+        }
+        if (document["func"] == "goto_pose_delta") {
+            double x = document["x"].GetDouble();
+            double y = document["y"].GetDouble();
+            double z = document["z"].GetDouble();
+            double duration = document["duration"].GetDouble();
+            arm->goto_pose_delta(x,y,z,duration);
+        }
+        if (document["func"] == "goto_gripper") {
+            double dest = document["dest"].GetDouble();
+            arm->goto_gripper(dest);
+        }
+        if (document["func"] == "get_action") {
+            gp->get_action();
+        }
+        if (document["func"] == "get_gripper_width") {
+            arm->get_gripper_width();
         }
     }
 

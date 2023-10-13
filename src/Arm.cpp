@@ -22,10 +22,10 @@ Arm::Arm(const std::string &addr, GamePad *gp, Comms *c)
     m_finished = 0;
 
     std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-    std::cout << "WARNING: This program will move the robot! "
-              << "Please make sure to have the user stop button at hand!" << std::endl
-              << "Press Enter to continue..." << std::endl;
-    std::cin.ignore();
+    // std::cout << "WARNING: This program will move the robot! "
+    //           << "Please make sure to have the user stop button at hand!" << std::endl
+    //           << "Press Enter to continue..." << std::endl;
+    // std::cin.ignore();
     m_robot->joint_motion(q_goal, 0.2);
     std::cout << "Finished moving to initial joint configuration." << std::endl;
 }
@@ -347,7 +347,6 @@ void Arm::get_pose(std::array<double, 16> pose)
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);
 
-    printf(strbuf.GetString());
     m_c->send_data(strbuf.GetString());
 }
 
@@ -368,16 +367,36 @@ void Arm::get_gripper_width()
 void Arm::goto_gripper(double dest)
 {
     m_robot->get_franka_gripper().move(dest, 0.1);
+
+    rapidjson::Document document;
+    document.SetObject();
+    rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
+    document.AddMember("done", 1, allocator);
+    rapidjson::StringBuffer strbuf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+    document.Accept(writer);
+
+    m_c->send_data(strbuf.GetString());
 }
 
 void Arm::goto_pose(double x, double y, double z, double duration)
 {
     m_robot->absolute_cart_motion(x, y, z, duration);
+
+    rapidjson::Document document;
+    document.SetObject();
+    rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
+    document.AddMember("done", 1, allocator);
+    rapidjson::StringBuffer strbuf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+    document.Accept(writer);
+
+    m_c->send_data(strbuf.GetString());
 }
 
 void Arm::goto_pose(std::array<double, 16> pose, double duration)
 {
-    m_robot->absolute_cart_motion(pose[12], pose[13], pose[14], duration);
+    goto_pose(pose[12], pose[13], pose[14], duration);
 }
 
 void Arm::goto_pose_delta(double dx, double dy, double dz, double duration)
@@ -385,6 +404,16 @@ void Arm::goto_pose_delta(double dx, double dy, double dz, double duration)
     auto tcp_motion = orl::PoseGenerators::RelativeMotion(orl::Position(dx, dy, dz), Frame::RobotTCP);
     orl::apply_speed_profile(tcp_motion);
     m_robot->move_cartesian(tcp_motion, duration);
+
+    rapidjson::Document document;
+    document.SetObject();
+    rapidjson::Document::AllocatorType &allocator = document.GetAllocator();
+    document.AddMember("done", 1, allocator);
+    rapidjson::StringBuffer strbuf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+    document.Accept(writer);
+
+    m_c->send_data(strbuf.GetString());
 }
 
 bool Arm::isFinished()

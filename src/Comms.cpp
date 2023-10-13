@@ -1,11 +1,13 @@
 #include "Comms.h"
 
+#include <iostream>
+#include <chrono>
 #include <netinet/in.h> 
 #include <stdio.h> 
 #include <stdlib.h> 
 #include <string.h> 
 #include <sys/socket.h> 
-#include <unistd.h> 
+#include <unistd.h>
 
 using namespace std;
 
@@ -61,6 +63,8 @@ void Comms::startThread() {
 
 void Comms::receiveLoop() {
     while (true) {
+        this_thread::sleep_for(chrono::milliseconds(1));
+        // lock_guard<mutex> lock(mMutex);
         char buffer[1024] = { 0 }; 
         int val = read(m_socket, buffer, 1024);
         if (val > 0) {
@@ -72,12 +76,13 @@ void Comms::receiveLoop() {
 
 bool Comms::get_command(string& buffer) {
     lock_guard<mutex> lock(qMutex);
-    if (m_q.size() == 0) {
-        return -1;
+    if (m_q.size() <= 0) {
+        return false;
     }
     buffer = m_q.front();
+    cout << "fetching command " << buffer << " from queue" << endl;
     m_q.pop();
-    return 0;
+    return true;
 }
 
 int Comms::receive_data(char* buffer) {
