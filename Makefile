@@ -13,7 +13,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so
 
-TARGET = main
+TARGET = velocityControl
 
 #==============================================#
 #                    MAIN                      #
@@ -90,6 +90,14 @@ eepos_traj_test: eepos_traj_test.o $(SHARED_LIBRARIES)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 eepos_traj_test.o: $(DIR)/tests/eepos_traj_test.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+endif
+
+ifeq ($(TARGET),velocityControl)
+velocityControl: examples_common.o velocityControl.o $(SHARED_LIBRARIES)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+velocityControl.o: $(DIR)/tests/velocityControl.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif
 
