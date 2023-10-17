@@ -16,10 +16,12 @@
 #include <franka/robot.h>
 #include <franka/model.h>
 
+#include <liborl/liborl.h>
+
 class VelocityController {
   public:
     VelocityController(int port);
-    std::array<double, 3> VelocityController::getEE(orl::Robot& robot);
+    std::array<double, 3> getEE(orl::Robot& robot, std::array<double, 3>& curpose);
   private:
     double time = 0.0;
     std::array<double, 100> buffer1;
@@ -40,9 +42,6 @@ class VelocityController {
     int steps = 0;
 };
 VelocityController::VelocityController(int port) {
-  for (int i = 0; i < 7; i++) {
-    control_input[i] = 0.0;
-  }
   for (int i = 0; i < 100; i++) {
     buffer1[i] = 0.0;
     buffer2[i] = 0.0;
@@ -81,13 +80,15 @@ double VelocityController::MovingAverage(std::array<double, 100>& buffer, double
   buffer[99] = input;
   return filtered_input;
 }
-std::array<double, 3> VelocityController::getEE(orl::Robot& robot) {
-  franka::RobotState robot_state = robot->get_franka_robot().readOnce();
+std::array<double, 3> VelocityController::getEE(orl::Robot& robot, std::array<double, 3>& curpose) {
+  franka::RobotState robot_state = robot.get_franka_robot().readOnce();
   std::array<double, 7> joint_position = robot_state.q;
   std::array<double, 7> joint_velocity = robot_state.dq;
   std::array<double, 7> applied_torque = robot_state.tau_ext_hat_filtered;
   std::array<double, 16> ee_pose = robot_state.O_T_EE_c;
-  std::array<double, 42> jacobian = modelPtr->zeroJacobian(franka::Frame::kEndEffector, robot_state);
+  curpose[0] = ee_pose[12];
+  curpose[1] = ee_pose[13];
+  curpose[2] = ee_pose[14];
   double send_rate = robot_state.control_command_success_rate;
   std::string state = "s,";
   for (int i = 0; i < 7; i++) {
@@ -102,8 +103,8 @@ std::array<double, 3> VelocityController::getEE(orl::Robot& robot) {
     state.append(std::to_string(applied_torque[i]));
     state.append(",");
   }
-  for (int i = 0; i < 42; i++) {
-    state.append(std::to_string(jacobian[i]));
+  for (int i = 0; i < 16; i++) {
+    state.append(std::to_string(ee_pose[i]));
     state.append(",");
   }
   char cstr[state.size() + 1];
@@ -145,9 +146,10 @@ int main(int argc, char** argv) {
   int port = std::stoi(argv[1]);
   orl::Robot robot("172.16.0.2");
   VelocityController* vc = new VelocityController(port);
+  std::array<double, 3> curpose;
   while (true) {
-    std::array<double, 3> eepos = vc->getEE(robot);
-    robot.absolute_cart_motion(eepos[0], eepos[1], eepos[2], 2);
+    std::array<double, 3> eepos = vc->getEE(robot, curpose);
+    robot.absolute_cart_motion(curpose[0] + eepos[0], curpose[1] + eepos[1], curpose[2] + eepos[2], 20);
   }
   return 0;
 }
