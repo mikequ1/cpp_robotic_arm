@@ -18,10 +18,9 @@
 
 class VelocityController {
   public:
-    VelocityController(franka::Model& model, int port);
-    franka::JointVelocities operator()(const franka::RobotState& robot_state, franka::Duration period);
+    VelocityController(int port);
+    std::array<double, 3> VelocityController::getEE(orl::Robot& robot);
   private:
-    franka::Model* modelPtr;
     double time = 0.0;
     std::array<double, 100> buffer1;
     std::array<double, 100> buffer2;
@@ -32,7 +31,7 @@ class VelocityController {
     std::array<double, 100> buffer7;
     std::array<double, 100> bufferRate;
     std::array<double, 7> qdot;
-    std::array<double, 7> control_input;
+    std::array<double, 3> ee_dest;
     double MovingAverage(std::array<double, 100>& buffer, double input);
     int sock = 0;
     int valread;
@@ -40,8 +39,7 @@ class VelocityController {
     char buffer[200] = {0};
     int steps = 0;
 };
-VelocityController::VelocityController(franka::Model& model, int port) {
-  modelPtr = &model;
+VelocityController::VelocityController(int port) {
   for (int i = 0; i < 7; i++) {
     control_input[i] = 0.0;
   }
@@ -83,11 +81,12 @@ double VelocityController::MovingAverage(std::array<double, 100>& buffer, double
   buffer[99] = input;
   return filtered_input;
 }
-franka::JointVelocities VelocityController::operator()(const franka::RobotState& robot_state,franka::Duration period) {
-  time += period.toSec();
+std::array<double, 3> VelocityController::getEE(orl::Robot& robot) {
+  franka::RobotState robot_state = robot->get_franka_robot().readOnce();
   std::array<double, 7> joint_position = robot_state.q;
   std::array<double, 7> joint_velocity = robot_state.dq;
   std::array<double, 7> applied_torque = robot_state.tau_ext_hat_filtered;
+  std::array<double, 16> ee_pose = robot_state.O_T_EE_c;
   std::array<double, 42> jacobian = modelPtr->zeroJacobian(franka::Frame::kEndEffector, robot_state);
   double send_rate = robot_state.control_command_success_rate;
   std::string state = "s,";
@@ -120,62 +119,35 @@ franka::JointVelocities VelocityController::operator()(const franka::RobotState&
       while (not first) {
         std::string substr;
         getline(ss, substr, ',');
-        if ( substr[0] == 's') {
+        if (substr[0] == 's') {
           first = true;
         }
       }
-      for (int i = 0; i < 7; i++) {
+      for (int i = 0; i < 3; i++) {
         std::string substr;
         getline(ss, substr, ',');
         double term = std::stod(substr);
-        control_input[i] = term;
+        ee_dest[i] = term;
       }
     } else {
-      for (int i = 0; i < 7; i++) {
-        control_input[i] = 0.0;
+      for (int i = 0; i < 3; i++) {
+        ee_dest[i] = ee_pose[12+i];
       }
     }
   }
-  double qdot1 = MovingAverage(buffer1, control_input[0]);
-  double qdot2 = MovingAverage(buffer2, control_input[1]);
-  double qdot3 = MovingAverage(buffer3, control_input[2]);
-  double qdot4 = MovingAverage(buffer4, control_input[3]);
-  double qdot5 = MovingAverage(buffer5, control_input[4]);
-  double qdot6 = MovingAverage(buffer6, control_input[5]);
-  double qdot7 = MovingAverage(buffer7, control_input[6]);
-  double comm_rate = MovingAverage(bufferRate, send_rate);
-  qdot = {{qdot1, qdot2, qdot3, qdot4, qdot5, qdot6, qdot7}};
-  for (int i = 0; i < qdot.size(); i++) {
-    std::cout << qdot[i] << "  ";
-  }
-  std::cout << std::endl;
-  franka::JointVelocities velocity(qdot);
-  steps = steps + 1;
-  if (steps % 1000 < 1) {
-    std::cout << "control_command_success_rate: " << comm_rate << std::endl;
-  }
-  return velocity;
+  return ee_dest;
 }
+
 int main(int argc, char** argv) {
   if (argc != 2){
     std::cerr << "2 arguments needed" << std::endl;
   }
   int port = std::stoi(argv[1]);
-  try {
-    franka::Robot robot("172.16.0.2");
-    franka::Model model = robot.loadModel();
-    robot.automaticErrorRecovery();
-    VelocityController motion_generator(model, port);
-    robot.setCollisionBehavior(
-        {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0}}, {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0}},
-        {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0}}, {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0}},
-        {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0}}, {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0}},
-        {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0}}, {{80.0, 80.0, 80.0, 80.0, 80.0, 80.0}});
-    robot.setJointImpedance({{3000, 3000, 3000, 2500, 2500, 2000, 2000}});
-    robot.control(motion_generator);
-  } catch (franka::Exception const& e) {
-    std::cout << e.what() << std::endl;
-    return -1;
+  orl::Robot robot("172.16.0.2");
+  VelocityController* vc = new VelocityController(port);
+  while (true) {
+    std::array<double, 3> eepos = vc->getEE(robot);
+    robot.absolute_cart_motion(eepos[0], eepos[1], eepos[2], 2);
   }
   return 0;
 }
