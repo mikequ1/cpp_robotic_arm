@@ -21,7 +21,7 @@
 class VelocityController {
   public:
     VelocityController(int port);
-    std::array<double, 3> getEE(orl::Robot& robot, std::array<double, 3>& curpose);
+    void getEE(orl::Robot& robot, std::array<double, 3>& nextpose, std::array<double, 3>& curpose);
   private:
     double time = 0.0;
     std::array<double, 100> buffer1;
@@ -80,7 +80,7 @@ double VelocityController::MovingAverage(std::array<double, 100>& buffer, double
   buffer[99] = input;
   return filtered_input;
 }
-std::array<double, 3> VelocityController::getEE(orl::Robot& robot, std::array<double, 3>& curpose) {
+void VelocityController::getEE(orl::Robot& robot, std::array<double, 3>& nextpose, std::array<double, 3>& curpose) {
   franka::RobotState robot_state = robot.get_franka_robot().readOnce();
   std::array<double, 7> joint_position = robot_state.q;
   std::array<double, 7> joint_velocity = robot_state.dq;
@@ -114,7 +114,6 @@ std::array<double, 3> VelocityController::getEE(orl::Robot& robot, std::array<do
     valread = read(sock, buffer, 200);
     send(sock, cstr, strlen(cstr), 0);
     if (valread > 0) {
-      printf(buffer);
       std::stringstream ss(buffer);
       bool first = false;
       while (not first) {
@@ -128,15 +127,14 @@ std::array<double, 3> VelocityController::getEE(orl::Robot& robot, std::array<do
         std::string substr;
         getline(ss, substr, ',');
         double term = std::stod(substr);
-        ee_dest[i] = term;
+        nextpose[i] = term;
       }
     } else {
       for (int i = 0; i < 3; i++) {
-        ee_dest[i] = ee_pose[12+i];
+        nextpose[i] = 0;
       }
     }
   }
-  return ee_dest;
 }
 
 int main(int argc, char** argv) {
@@ -147,9 +145,19 @@ int main(int argc, char** argv) {
   orl::Robot robot("172.16.0.2");
   VelocityController* vc = new VelocityController(port);
   std::array<double, 3> curpose;
+  std::array<double, 3> nextpose;
+  robot.absolute_cart_motion(0.336, 0.023, -0.077, 5);
   while (true) {
-    std::array<double, 3> eepos = vc->getEE(robot, curpose);
-    robot.absolute_cart_motion(curpose[0] + eepos[0], curpose[1] + eepos[1], curpose[2] + eepos[2], 20);
+    vc->getEE(robot, nextpose, curpose);
+
+    printf("| %f, %f, %f -> %f, %f, %f \n", 
+          curpose[0], 
+          curpose[1], 
+          curpose[2],
+          curpose[0] + nextpose[0],
+          curpose[1] + nextpose[1],
+          curpose[2] + nextpose[2]);
+    robot.absolute_cart_motion(curpose[0] + nextpose[0], curpose[1] + nextpose[1], curpose[2] + nextpose[2], 5);
   }
   return 0;
 }
