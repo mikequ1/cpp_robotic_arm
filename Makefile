@@ -13,7 +13,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so
 
-TARGET = velocityControl
+TARGET = move_continuous
 
 #==============================================#
 #                    MAIN                      #
@@ -34,11 +34,11 @@ endif
 #                    TESTS                     #
 #==============================================#
 
-ifeq ($(TARGET),generate_1d_mvt)
-generate_1d_mvt: examples_common.o generate_1d_mvt.o $(SHARED_LIBRARIES)
+ifeq ($(TARGET),move_continuous)
+move_continuous: examples_common.o move_continuous.o $(SHARED_LIBRARIES)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-generate_1d_mvt.o: $(DIR)/tests/generate_1d_mvt.cpp
+move_continuous.o: $(DIR)/tests/move_continuous.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif
 

@@ -143,10 +143,17 @@ int main(int argc, char** argv) {
   }
   int port = std::stoi(argv[1]);
   orl::Robot robot("172.16.0.2");
+  std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
+  // std::cout << "WARNING: This program will move the robot! "
+  //           << "Please make sure to have the user stop button at hand!" << std::endl
+  //           << "Press Enter to continue..." << std::endl;
+  // std::cin.ignore();
+  robot.joint_motion(q_goal, 0.2);
+  std::cout << "Finished moving to initial joint configuration." << std::endl;
   VelocityController* vc = new VelocityController(port);
   std::array<double, 3> curpose;
   std::array<double, 3> nextpose;
-  robot.absolute_cart_motion(0.336, 0.023, -0.077, 5);
+  robot.absolute_cart_motion(0.336, 0.023, -0.077, 3);
   while (true) {
     vc->getEE(robot, nextpose, curpose);
 
