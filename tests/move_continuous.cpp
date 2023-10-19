@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     // robot.absolute_cart_motion(pos1[0], pos1[1], pos1[2], 3);
     // robot.absolute_cart_motion(pos2[0], pos2[1], pos2[2], 3);
 
-    double max_time = 50.0;
+    double max_time = 5.0;
     array<double, 3> delta;
     robot.get_franka_robot().control([=, &time, &initial_pose, &q, &delta](const franka::RobotState& robot_state,
                                          franka::Duration period) -> franka::CartesianPose {
@@ -65,18 +65,20 @@ int main(int argc, char** argv) {
       } 
 
       std::array<double, 16> new_pose = robot_state.O_T_EE_c;
-
+    
       double progress = time/max_time;
       double speed_factor = (1 - std::cos(M_PI * progress)) / 2.0;
 
-      new_pose[12] += 1/progress * delta[0] * speed_factor;
-      new_pose[13] += 1/progress * delta[1] * speed_factor;
-      new_pose[14] += 1/progress * delta[2] * speed_factor;
+      new_pose[12] += delta[0]/2000 * speed_factor;
+      new_pose[13] += delta[1]/2000 * speed_factor;
+      new_pose[14] += delta[2]/2000 * speed_factor;
       cout << progress << " | " << new_pose[12] << ", " << new_pose[13] << ", " << new_pose[14] <<  endl;
     
 
-      if (time >= 5.0) {
+      if (time >= 10.0) {
         std::cout << std::endl << "Finished motion, shutting down example" << std::endl;
+        array<double, 16> end_pose = robot_state.O_T_EE;
+        cout << end_pose[12] << ", " << end_pose[13] << ", " << end_pose[14] <<  endl;
         return franka::MotionFinished(new_pose);
       }
       return new_pose;
