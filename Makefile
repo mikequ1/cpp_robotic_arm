@@ -11,7 +11,7 @@ INCLUDE = 	-I$(DIR)/include \
 			-I$(DIR)/liborl/include
 CXXFLAGS = -g -Wall -Wextra $(INCLUDE) 
 
-SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so
+SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so /usr/lib/x86_64-linux-gnu/libmpfr.so
 
 TARGET = move_continuous
 

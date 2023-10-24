@@ -1,6 +1,7 @@
 // Copyright (c) 2017 Franka Emika GmbH
 // Use of this source code is governed by the Apache-2.0 license, see LICENSE
 #include <cmath>
+#include <math.h>
 #include <iostream>
 #include <vector>
 #include <queue>
@@ -41,22 +42,23 @@ int main(int argc, char** argv) {
 
     robot.absolute_cart_motion(0.336, 0.023, -0.077, 3);
 
-    // ROBOT RESET CODE ^
-
     queue<array<double, 3>> q;
     array<double, 3> pos1{{0.386, 0.023, 0.05}};
     array<double, 3> pos2{{0.436, 0.023, 0}};
     q.push(pos1);
     q.push(pos2);
+    // robot.absolute_cart_motion(pos1[0], pos1[1], pos1[2], 3);
+    // robot.absolute_cart_motion(pos2[0], pos2[1], pos2[2], 3);
 
-    double max_time = 5.0;
+    double max_time = 1;
     array<double, 3> delta;
-    robot.get_franka_robot().control([=, &time, &initial_pose, &q, &delta](const franka::RobotState& robot_state,
+    array<double, 3> accumulated_delta = {{0,0,0}};
+    robot.get_franka_robot().control([=, &time, &initial_pose, &q, &delta, &accumulated_delta](const franka::RobotState& robot_state,
                                          franka::Duration period) -> franka::CartesianPose {
       time += period.toSec();
 
       if (time == 0.0) {
-        initial_pose = robot_state.O_T_EE_c;
+        initial_pose = robot_state.O_T_EE;
         array<double, 3> dest = q.front();
         q.pop();
         for (int i = 0; i < 3; i++) {
@@ -64,28 +66,28 @@ int main(int argc, char** argv) {
         }
       } 
 
-      double time_increment = period.toSec();
-      double frequency = 1.0 / time_increment;
+      std::array<double, 16> new_pose = robot_state.O_T_EE_d;
+    
+      double t = time/max_time;
+      double speed_factor = (1 - std::cos(M_PI * t)) / 2.0;
+      long double dist_factor = (1.0/2) * (t - M_1_PI * sin(M_PI * t));
 
-      std::array<double, 3> velocity;
-      for(int i = 0; i < 3; i++) {
-          velocity[i] = delta[i] / max_time;
-      }
+      long double next_x = delta[0] * dist_factor;
+      long double next_y = delta[1] * dist_factor;
+      long double next_z = delta[2] * dist_factor;
 
-      std::array<double, 3> scale_factor;
-      for(int i = 0; i < 3; i++) {
-          scale_factor[i] = velocity[i] / frequency;
-      }
+      new_pose[12] += next_x - accumulated_delta[0];
+      new_pose[13] += next_y - accumulated_delta[1];
+      new_pose[14] += next_z - accumulated_delta[2];
 
-      double progress = time/max_time;
-      double speed_factor = (1 - std::cos(M_PI * progress)) / 2.0;
+      cout << dist_factor << endl;
+      cout << t << " | diff | " << next_x - accumulated_delta[0] << ", " << next_y - accumulated_delta[1] << ", " << next_z - accumulated_delta[2] <<  endl;
 
-      std::array<double, 16> new_pose = robot_state.O_T_EE_c;
+      accumulated_delta[0] = next_x;
+      accumulated_delta[1] = next_y;
+      accumulated_delta[2] = next_z;
 
-      new_pose[12] += scale_factor[0] * speed_factor;
-      new_pose[13] += scale_factor[1] * speed_factor;
-      new_pose[14] += scale_factor[2] * speed_factor;
-      cout << progress << " | " << new_pose[12] << ", " << new_pose[13] << ", " << new_pose[14] <<  endl;
+      cout << t << " | new pose | " << new_pose[12] << ", " << new_pose[13] << ", " << new_pose[14] <<  endl;
     
 
       if (time >= 10.0) {

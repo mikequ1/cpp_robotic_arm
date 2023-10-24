@@ -160,12 +160,12 @@ void Arm::controlvel()
     int status = 1;
 
     GamePad *gp = m_gp;
-    this->get_gripper_width();
-    this->goto_gripper(0.08);
-    this->get_gripper_width();
-    this->goto_gripper(0.01);
-    this->goto_pose(0.65, 0.0, 0.2, 3);
-    this->goto_pose_delta(-0.2, 0, 0.1, 2);
+    // this->get_gripper_width();
+    // this->goto_gripper(0.08);
+    // this->get_gripper_width();
+    // this->goto_gripper(0.01);
+    // this->goto_pose(0.65, 0.0, 0.2, 3);
+    // this->goto_pose_delta(-0.2, 0, 0.1, 2);
     m_robot->get_franka_robot().control([=, &status, &time, &thistrack](const franka::RobotState &robot_state,
                                                                         franka::Duration period) -> franka::CartesianVelocities
                                         {
@@ -175,7 +175,7 @@ void Arm::controlvel()
         time += period.toSec();
         thistrack += period.toSec();
 
-        this->get_pose(robot_state.O_T_EE_c);
+        // this->get_pose(robot_state.O_T_EE_c);
 
         cout << status << endl;
         franka::CartesianVelocities output = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
