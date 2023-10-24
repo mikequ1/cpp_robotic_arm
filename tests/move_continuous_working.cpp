@@ -27,20 +27,6 @@ static const double INIT_TIME = 10.0;
 static const int S_TO_MS = 1000;
 
 bool finished_traj(array<double, 3>& cur, array<double, 3>& dest, array<double, 3>& delta) {
-  /**
-   * Determines whether a trajectory in 3D space is finished.
-   *
-   * @param cur The current position in 3D space.
-   * @param dest The destination position in 3D space.
-   * @param delta The direction and magnitude of movement in each dimension.
-   *
-   * @return true if the current position has reached or surpassed the destination 
-   * based on the movement direction for each dimension. false otherwise.
-   *
-   * @note The direction of movement in each dimension is determined by the sign of 
-   * the corresponding value in the delta array. Positive indicates forward movement,
-   * and negative indicates backward movement.
-   */
   int x = delta[0] > 0 ? 1:0;
   int y = delta[1] > 0 ? 1:0;
   int z = delta[2] > 0 ? 1:0;
@@ -62,18 +48,20 @@ bool test(){
 
 int main() {
   try {
-    // Connecting to the robot and resetting to home position
     orl::Robot robot("172.16.0.2");
     std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
+    // std::cout << "WARNING: This program will move the robot! "
+    //           << "Please make sure to have the user stop button at hand!" << std::endl
+    //           << "Press Enter to continue..." << std::endl;
+    // std::cin.ignore();
     robot.joint_motion(q_goal, 0.2);
-    robot.absolute_cart_motion(0.336, 0.023, -0.077, 3);
 
-    // Robot movement
     double time = 0.0;
     double time_goal = 0.0;
     double time_state = 0.0;
 
-    // Queue initialization for EE coordinates
+    robot.absolute_cart_motion(0.336, 0.023, -0.077, 3);
+
     queue<array<double, 3>> q;
     array<double, 3> pos1{{0.436, 0.023, 0.1}};
     array<double, 3> pos2{{0.536, 0.023, -0.05}};
@@ -110,11 +98,11 @@ int main() {
       array<double, 3> cur;
       franka::CartesianVelocities output = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
 
-      pose = robot_state.O_T_EE_c; // pose[12] = x, pose[13] = y, pose[14] = z
+      pose = robot_state.O_T_EE_c;
       for (int i = 0; i < 3; i++) {
         cur[i] = pose[12+i];
       }
-      // State = 1 computes the unit vector for the difference (delta) between the goal and current pose
+
       if (state == 1) {
         if (q.size() == 0) {
           return output;
@@ -136,14 +124,12 @@ int main() {
       }
 
       // printf("state: %d, %f - current position: %f, %f, %f \n", state, time_state, cur[0], cur[1], cur[2]);
-
-      // State = 2 speeds up the robot's motion based on a cosine function which ensures smooth acceleration. The robot moves to state 3 and stops accelerating after a specific time.
       if (state == 2) {
         if (time_state >= reset_time / 2) {
           state = 3;
           time_state = 0;
         } else {
-          double v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI * time_state / reset_time)); // changed to 2pi since we want peak velocity to be at 0.5 progress instead of 1.0
+          double v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI / reset_time * time_state));
           double vx = v * delta_unit[0];
           double vy = v * delta_unit[1];
           double vz = v * delta_unit[2];
@@ -152,16 +138,11 @@ int main() {
         }
       }
 
-      // State 3: The robot moves at a constant velocity. If the robot finishes its trajectory and there are no more points in the queue, it moves to state 4. 
-      // If there are more points, it proceeds to state 5 that occurs at a constant velocity.
       if (state == 3) {
-        // Robot finishes its trajectory and there are no more points in the queue
         if (finished_traj(cur, goal, delta) && q.size() == 0) {
           state = 4;
           time_state = 0;
           printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
-
-        // More points in the queue
         } else if (finished_traj(cur, goal, delta) && q.size() != 0) {
           printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
           state = 5;
@@ -169,8 +150,6 @@ int main() {
           next_goal = q.front();
           q.pop();
 
-          // Adjusts the computed direction and distance to the next goal by accounting for anticipated motion 
-          // (0.05 * reset_time * delta_unit[i]) in the robot's current movement direction over a specified time duration.
           double norm = 0;
           for (int i = 0; i < 3; i++) {
             next_delta[i] = next_goal[i] - pose[12+i] - (0.05 * reset_time * delta_unit[i]);
@@ -181,7 +160,7 @@ int main() {
             next_delta_unit[i] = next_delta[i] / norm;
           }
         }
-        v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
+        double v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI / reset_time * (reset_time / 2)));
         double vx = v * delta_unit[0];
         double vy = v * delta_unit[1];
         double vz = v * delta_unit[2];
@@ -189,16 +168,13 @@ int main() {
         return output;
       }
 
-      // Robot has finished its trajectory hence, velocity decreases
       if (state == 4) {
         if (time_state >= reset_time / 2) {
           state = 0;
           time_state = 0;
           return output;
         }
-        // Adding the phase shift of reset_time/2, starting the function at the point where the velocity would be at its maximum.
-        // The robot would start slowing down immediately, ensuring a smooth deceleration until it stops
-        double v = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI * (time_state + reset_time/2) / reset_time));
+        double v = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI / reset_time * (time_state + reset_time/2)));
         double vx = v * delta_unit[0];
         double vy = v * delta_unit[1];
         double vz = v * delta_unit[2];
@@ -212,7 +188,6 @@ int main() {
         return output;
       }
 
-      // state = 5: the robot smoothly transitions between reaching one point and accelerating towards the next point.
       if (state == 5) {
         if (time_state >= reset_time / 2) {
           state = 3;
@@ -222,8 +197,8 @@ int main() {
           delta = next_delta;
           delta_unit = next_delta_unit;
         }
-        double v_slow = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI  * (time_state + reset_time/2) / reset_time));
-        double v_acc = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI * time_state / reset_time));
+        double v_slow = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI / reset_time * (time_state + reset_time/2)));
+        double v_acc = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI / reset_time * (time_state)));
         double vx = v_slow * delta_unit[0] + v_acc * next_delta_unit[0];
         double vy = v_slow * delta_unit[1] + v_acc * next_delta_unit[1];
         double vz = v_slow * delta_unit[2] + v_acc * next_delta_unit[2];
