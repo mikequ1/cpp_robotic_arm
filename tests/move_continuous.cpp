@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sstream>
+#include <chrono>
+#include <thread>
 
 #include "franka/exception.h"
 #include <franka/robot.h>
@@ -50,12 +52,17 @@ bool finished_traj(array<double, 3>& cur, array<double, 3>& dest, array<double, 
   int x = delta[0] > 0 ? 1:0;
   int y = delta[1] > 0 ? 1:0;
   int z = delta[2] > 0 ? 1:0;
+
+  x = abs(delta[0]) < 0.005 ? -1:x;
+  y = abs(delta[1]) < 0.005 ? -1:y;
+  z = abs(delta[2]) < 0.005 ? -1:z;
+
   int res = 0;
-  if (((cur[0] > dest[0]) && x == 1) || ((cur[0] < dest[0]) && x == 0))
+  if ((x == -1) || ((cur[0] > dest[0]) && x == 1) || ((cur[0] < dest[0]) && x == 0))
     res += 1;
-  if (((cur[1] > dest[1]) && y == 1) || ((cur[1] < dest[1]) && y == 0))
+  if ((y == -1) || ((cur[1] > dest[1]) && y == 1) || ((cur[1] < dest[1]) && y == 0))
     res += 1;
-  if (((cur[2] > dest[2]) && z == 1) || ((cur[2] < dest[2]) && z == 0))
+  if ((z == -1) || ((cur[2] > dest[2]) && z == 1) || ((cur[2] < dest[2]) && z == 0))
     res += 1;
   if (res == 3)
     return true;
@@ -79,6 +86,7 @@ void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int
   int valread;
   while (true) {
     valread = read(sock, buffer, 200);
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
     if (valread > 0) break;
   }
 
