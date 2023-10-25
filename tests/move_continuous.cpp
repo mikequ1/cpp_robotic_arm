@@ -4,6 +4,12 @@
 #include <iostream>
 #include <vector>
 #include <queue>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sstream>
 
 #include "franka/exception.h"
 #include <franka/robot.h>
@@ -56,14 +62,80 @@ bool finished_traj(array<double, 3>& cur, array<double, 3>& dest, array<double, 
   return false;
 }
 
-bool test(){
-  return true;
+
+void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int sock) {
+  std::string state = "s,";
+  for (int i = 0; i < 16; i++) {
+    state.append(std::to_string(ee_pose[i]));
+    state.append(",");
+  }
+  char cstr[state.size() + 1];
+  std::copy(state.begin(), state.end(), cstr);
+  cstr[state.size()] = '\0';
+  char buffer[200] = {0};
+  cout << "sent state" << endl;
+  send(sock, cstr, strlen(cstr), 0);
+
+  int valread;
+  while (true) {
+    valread = read(sock, buffer, 200);
+    if (valread > 0) break;
+  }
+
+  printf(buffer);
+  std::stringstream ss(buffer);
+  bool first = false;
+  while (!first) {
+    std::string substr;
+    getline(ss, substr, ',');
+    if (substr[0] == 's') {
+      first = true;
+    }
+  }
+  for (int i = 0; i < 3; i++) {
+    std::string substr;
+    getline(ss, substr, ',');
+    double term = std::stod(substr);
+    nextpose[i] = term;
+  }
 }
 
-int main() {
-  try {
+
+int connect2control(int PORT) {
+  int sock = 0;
+  struct sockaddr_in serv_addr;
+  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    std::cout << "Socket Creation Error!" << std::endl;
+  }
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons(PORT);
+  if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+    std::cout << "Invalid Address / Address Not Supported" << std::endl;
+  }
+  if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+    std::cout << "Connection Failed" << std::endl;
+  }
+  int status = fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
+  if (status == -1) {
+    std::cout << "Failed to Make the Socket Non-Blocking" << std::endl;
+  }
+
+  return sock;
+}
+
+int main(int argc, char** argv) {
+    // Robot Connection
+    if (argc != 2) {
+      cerr << "two arguments required" << endl;
+      return -1;
+    }
+    int port = std::stoi(argv[1]);
+
     // Connecting to the robot and resetting to home position
     orl::Robot robot("172.16.0.2");
+    std::cout << "robot connected" << std::endl;
+    int sock = connect2control(port);
+
     std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
     robot.joint_motion(q_goal, 0.2);
     robot.absolute_cart_motion(0.336, 0.023, -0.077, 3);
@@ -75,17 +147,18 @@ int main() {
 
     // Queue initialization for EE coordinates
     queue<array<double, 3>> q;
-    array<double, 3> pos1{{0.436, 0.023, 0.1}};
-    array<double, 3> pos2{{0.536, 0.023, -0.05}};
-    array<double, 3> pos3{{0.636, 0.023, 0.1}};
-    array<double, 3> pos4{{0.736, 0.023, -0.05}};
-    q.push(pos1);
-    q.push(pos2);
-    q.push(pos3);
-    q.push(pos4);
+    array<double, 3> new_goal;
+    // array<double, 3> pos1{{0.436, 0.023, 0.1}};
+    // array<double, 3> pos2{{0.536, 0.023, -0.05}};
+    // array<double, 3> pos3{{0.636, 0.023, 0.1}};
+    // array<double, 3> pos4{{0.736, 0.023, -0.05}};
+    // q.push(pos1);
+    // q.push(pos2);
+    // q.push(pos3);
+    // q.push(pos4);
 
-    double reset_time = 0.3;
-    double velocity_factor = 0.1;
+    double reset_time = 0.2;
+    double velocity_factor = 0.05;
 
     std::array<double, 16> pose;
     array<double, 3> delta;
@@ -116,6 +189,12 @@ int main() {
       }
       // State = 1 computes the unit vector for the difference (delta) between the goal and current pose
       if (state == 1) {
+        array<double, 3> next;
+        getEE(pose, next, sock);
+        for (int i = 0; i < 3; i++) {
+          next[i] += cur[i];
+        }
+        q.push(next);
         if (q.size() == 0) {
           return output;
         }
@@ -135,7 +214,8 @@ int main() {
         time_state = 0;
       }
 
-      // printf("state: %d, %f - current position: %f, %f, %f \n", state, time_state, cur[0], cur[1], cur[2]);
+      printf("state: %d, %f \n - current position: %f, %f, %f \n - cur goal: %f, %f, %f \n", 
+            state, time_state, cur[0], cur[1], cur[2], goal[0], goal[1], goal[2]);
 
       // State = 2 speeds up the robot's motion based on a cosine function which ensures smooth acceleration. The robot moves to state 3 and stops accelerating after a specific time.
       if (state == 2) {
@@ -156,37 +236,43 @@ int main() {
       // If there are more points, it proceeds to state 5 that occurs at a constant velocity.
       if (state == 3) {
         // Robot finishes its trajectory and there are no more points in the queue
-        if (finished_traj(cur, goal, delta) && q.size() == 0) {
-          state = 4;
-          time_state = 0;
+        if (finished_traj(cur, goal, delta)) {
           printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
-
-        // More points in the queue
-        } else if (finished_traj(cur, goal, delta) && q.size() != 0) {
-          printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
-          state = 5;
-          time_state = 0;
-          next_goal = q.front();
-          q.pop();
-
-          // Adjusts the computed direction and distance to the next goal by accounting for anticipated motion 
-          // (0.05 * reset_time * delta_unit[i]) in the robot's current movement direction over a specified time duration.
-          double norm = 0;
+          array<double, 3> next;
+          getEE(pose, next, sock);
           for (int i = 0; i < 3; i++) {
-            next_delta[i] = next_goal[i] - pose[12+i] - (0.05 * reset_time * delta_unit[i]);
-            norm += (next_delta[i] * next_delta[i]);
+            next[i] = cur[i] + next[i];
           }
-          norm = sqrt(norm);
-          for (int i = 0; i < delta.size(); i++) {
-            next_delta_unit[i] = next_delta[i] / norm;
+          q.push(next);
+          if (q.size() == 0) {
+            state = 4;
+            time_state = 0;
+          } else {
+            state = 5;
+            time_state = 0;
+            next_goal = q.front();
+            q.pop();
+
+            // Adjusts the computed direction and distance to the next goal by accounting for anticipated motion 
+            // (0.05 * reset_time * delta_unit[i]) in the robot's current movement direction over a specified time duration.
+            double norm = 0;
+            for (int i = 0; i < 3; i++) {
+              next_delta[i] = next_goal[i] - pose[12+i] - (0.05 * reset_time * delta_unit[i]);
+              norm += (next_delta[i] * next_delta[i]);
+            }
+            norm = sqrt(norm);
+            for (int i = 0; i < delta.size(); i++) {
+              next_delta_unit[i] = next_delta[i] / norm;
+            }
           }
         }
-        v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
-        double vx = v * delta_unit[0];
-        double vy = v * delta_unit[1];
-        double vz = v * delta_unit[2];
-        output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
-        return output;
+          double v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
+          double vx = v * delta_unit[0];
+          double vy = v * delta_unit[1];
+          double vz = v * delta_unit[2];
+          output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
+          cout << v << endl;
+          return output;
       }
 
       // Robot has finished its trajectory hence, velocity decreases
@@ -238,10 +324,6 @@ int main() {
       }
       return output;
     });
-  } catch (const franka::Exception& e) {
-    std::cout << e.what() << std::endl;
-    return -1;
-  }
 
   return 0;
 }
