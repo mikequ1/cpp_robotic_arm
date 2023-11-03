@@ -13,9 +13,8 @@
 
 using namespace std;
 
-GamePad::GamePad(const char *device, Comms* c)
+GamePad::GamePad(const char *device)
 {
-    m_c = c;
     cout << "GamePad initialized" << endl;
     m_gp = open(device, O_RDONLY);
 
@@ -33,14 +32,12 @@ GamePad::~GamePad()
 void GamePad::startThread()
 {
     cout << "running thread" << endl;
-    mThread = std::thread(&GamePad::run, this);
+    mThread = std::thread(&GamePad::run_atomic, this);
 }
 
 void GamePad::run()
 {
     struct js_event event;
-    struct axis_state axes[3] = {0};
-    size_t axis;
     m_bs = 0;
 
     while (readEvent(m_gp, &event) == 0)
@@ -50,6 +47,27 @@ void GamePad::run()
             lock_guard<mutex> lock(mMutex);
             // printf("Button %u %s\n", event.number, event.value ? "pressed" : "released");
             m_bs += 2 * (event.value - 0.5) * pow(2, event.number);
+        }
+        fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
+
+void GamePad::run_atomic()
+{
+    struct js_event event;
+    m_bs = atomic_int(0);
+
+    while (readEvent(m_gp, &event) == 0)
+    {
+        if (event.type == JS_EVENT_BUTTON)
+        {
+            lock_guard<mutex> lock(mMutex);
+            if (event.value == 1){
+                atomic_fetch_add(&m_bsa, pow(2, event.number));
+            } else {
+                atomic_fetch_sub(&m_bsa, pow(2, event.number));
+            }
         }
         fflush(stdout);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -83,6 +101,12 @@ int GamePad::getButtonState()
     return m_bs;
 }
 
+int GamePad::getButtonStateAtomic()
+{
+    int bs = m_bsa.load(std::memory_order_relaxed);
+    return bs;
+}
+
 void GamePad::get_action()
 {
     rapidjson::Value action(m_bs);
@@ -93,6 +117,4 @@ void GamePad::get_action()
     rapidjson::StringBuffer strbuf;
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);
-
-    m_c->send_data(strbuf.GetString());
 }

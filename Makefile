@@ -35,10 +35,17 @@ endif
 #==============================================#
 
 ifeq ($(TARGET),move_continuous)
-move_continuous: examples_common.o move_continuous.o $(SHARED_LIBRARIES)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+SRCS = $(wildcard src/*.cpp)
+
+OBJS := $(patsubst %.cpp,%.o,$(SRCS:src/%=%))
+
+move_continuous: move_continuous.o $(SHARED_LIBRARIES) $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
 
 move_continuous.o: $(DIR)/tests/move_continuous.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif
 

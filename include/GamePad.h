@@ -2,6 +2,7 @@
 
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 #include "Comms.h"
 
@@ -18,7 +19,7 @@ public:
      *
      * @param device Device path e.g. /dev/input/js0
      */
-    GamePad(const char *device, Comms* c);
+    GamePad(const char *device);
 
     /// @brief Destructor
     virtual ~GamePad();
@@ -35,7 +36,11 @@ public:
      */
     void run();
 
+    void run_atomic();
+
     int getButtonState();
+
+    int getButtonStateAtomic();
 
     void get_action();
 
@@ -57,6 +62,8 @@ private:
      * @return size_t returns the axis that the event indicated.
      */
     size_t getAxisState(struct js_event *event, struct axis_state axes[3]);
+
+    std::atomic<int> m_bsa;
 
     /// @brief socket comms object
     Comms* m_c;
