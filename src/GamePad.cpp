@@ -62,7 +62,6 @@ void GamePad::run_atomic()
     {
         if (event.type == JS_EVENT_BUTTON)
         {
-            lock_guard<mutex> lock(mMutex);
             if (event.value == 1){
                 atomic_fetch_add(&m_bsa, pow(2, event.number));
             } else {

@@ -77,12 +77,14 @@ bool finished_traj(array<double, 3>& cur, array<double, 3>& dest, array<double, 
 }
 
 
-void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int sock) {
+void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int sock, int bs) {
   std::string state = "s,";
   for (int i = 0; i < 16; i++) {
     state.append(std::to_string(ee_pose[i]));
     state.append(",");
   }
+  state.append(std::to_string(bs));
+  state.append(",");
   char cstr[state.size() + 1];
   std::copy(state.begin(), state.end(), cstr);
   cstr[state.size()] = '\0';
@@ -156,7 +158,7 @@ int main(int argc, char** argv) {
 
     std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
     robot.joint_motion(q_goal, 0.2);
-    robot.absolute_cart_motion(0.336, 0.023, -0.077, 3);
+    robot.absolute_cart_motion(0.336, -0.023, -0.077, 3);
 
     // Robot movement
     double time = 0.0;
@@ -197,6 +199,7 @@ int main(int argc, char** argv) {
       time_goal += period.toSec();
       time_state += period.toSec();
 
+      int bs = gp->getButtonStateAtomic();
       array<double, 3> cur;
       franka::CartesianVelocities output = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
 
@@ -206,8 +209,11 @@ int main(int argc, char** argv) {
       }
       // State = 1 computes the unit vector for the difference (delta) between the goal and current pose
       if (state == 1) {
+        if (bs == 0){
+          return output;
+        }
         array<double, 3> next;
-        getEE(pose, next, sock);
+        getEE(pose, next, sock, bs);
         for (int i = 0; i < 3; i++) {
           next[i] += cur[i];
         }
@@ -232,7 +238,7 @@ int main(int argc, char** argv) {
       }
 
       printf("state: %d, %f \n - current position: %f, %f, %f \n - cur goal: %f, %f, %f \n - Joystick: %d\n", 
-            state, time_state, cur[0], cur[1], cur[2], goal[0], goal[1], goal[2], gp->getButtonStateAtomic());
+            state, time_state, cur[0], cur[1], cur[2], goal[0], goal[1], goal[2], bs);
 
       // State = 2 speeds up the robot's motion based on a cosine function which ensures smooth acceleration. The robot moves to state 3 and stops accelerating after a specific time.
       if (state == 2) {
@@ -253,10 +259,14 @@ int main(int argc, char** argv) {
       // If there are more points, it proceeds to state 5 that occurs at a constant velocity.
       if (state == 3) {
         // Robot finishes its trajectory and there are no more points in the queue
+        if (bs == 0){
+          state = 4;
+          time_state = 0;
+        }
         if (finished_traj(cur, goal, delta)) {
           printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
           array<double, 3> next;
-          getEE(pose, next, sock);
+          getEE(pose, next, sock, bs);
           for (int i = 0; i < 3; i++) {
             next[i] = cur[i] + next[i];
           }
@@ -300,7 +310,7 @@ int main(int argc, char** argv) {
       // Robot has finished its trajectory hence, velocity decreases
       if (state == 4) {
         if (time_state >= reset_time / 2) {
-          state = 0;
+          state = 1;
           time_state = 0;
           return output;
         }
