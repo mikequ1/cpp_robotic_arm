@@ -13,7 +13,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so /usr/lib/x86_64-linux-gnu/libmpfr.so
 
-TARGET = move_continuous
+TARGET = move_continuous_wo_gripper
 
 #==============================================#
 #                    MAIN                      #
@@ -33,6 +33,19 @@ endif
 #==============================================#
 #                    TESTS                     #
 #==============================================#
+
+ifeq ($(TARGET),move_continuous_wo_gripper)
+SRCS = $(wildcard src/*.cpp)
+OBJS := $(patsubst %.cpp, %.o, $(SRCS:src/%=%))
+move_continuous_wo_gripper: move_continuous_wo_gripper.o $(SHARED_LIBRARIES) $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
+move_continuous_wo_gripper.o: $(DIR)/tests/move_continuous_wo_gripper.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+%.o: src/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+endif
+
+
 
 ifeq ($(TARGET),move_continuous)
 SRCS = $(wildcard src/*.cpp)
