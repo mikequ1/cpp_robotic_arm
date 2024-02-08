@@ -37,11 +37,11 @@ static const double INIT_TIME = 10.0;
 static const int S_TO_MS = 1000;
 static const double MIN_Z = -0.07;
 static const double MIN_DZ = -0.005;
-static const double V_FACTOR = 0.02; // in m/s
+static const double V_FACTOR = 0.04; // in m/s
 static const char *DEVICE_PATH = "/dev/input/js0";
 
 
-bool finished_traj(array<double, 3>& cur, array<double, 3>& dest, array<double, 3>& delta) {
+bool finished_traj(array<double, 3>& cur, array<double, 4>& dest, array<double, 3>& delta) {
   /**
    * Determines whether a trajectory in 3D space is finished.
    *
@@ -77,7 +77,7 @@ bool finished_traj(array<double, 3>& cur, array<double, 3>& dest, array<double, 
 }
 
 
-void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int sock, int bs) {
+void getEE(std::array<double, 16>& ee_pose, std::array<double, 4>& nextpose, int sock, int bs) {
   std::string state = "s,";
   for (int i = 0; i < 16; i++) {
     state.append(std::to_string(ee_pose[i]));
@@ -108,6 +108,7 @@ void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int
       first = true;
     }
   }
+  // X and Y directions
   for (int i = 0; i < 2; i++) {
     std::string substr;
     getline(ss, substr, ',');
@@ -115,6 +116,13 @@ void getEE(std::array<double, 16>& ee_pose, std::array<double, 3>& nextpose, int
     double term = std::stod(substr);
     nextpose[i] = term;
   }
+  nextpose[2] = 0; // NO Z axis (for now)
+  // Velocity Multiplier
+  std::string substr;
+  getline(ss, substr, ',');
+  cout << substr << endl;
+  double term = std::stod(substr);
+  nextpose[3] = term;
 }
 
 int connect2control(int PORT) {
@@ -164,24 +172,17 @@ int main(int argc, char** argv) {
   double time_state = 0.0;
 
   // Queue initialization for EE coordinates
-  queue<array<double, 3>> q;
-  // array<double, 3> pos1{{0.436, 0.023, 0.1}};
-  // array<double, 3> pos2{{0.536, 0.023, -0.05}};
-  // array<double, 3> pos3{{0.636, 0.023, 0.1}};
-  // array<double, 3> pos4{{0.736, 0.023, -0.05}};
-  // q.push(pos1);
-  // q.push(pos2);
-  // q.push(pos3);
-  // q.push(pos4);
+  queue<array<double, 4>> q;
 
   double reset_time = 0.25;
   double velocity_factor = V_FACTOR;
+  double cur_velocity = 0;
 
   std::array<double, 16> pose;
   array<double, 3> delta;
   array<double, 3> delta_unit;
-  array<double, 3> goal;
-  array<double, 3> next_goal;
+  array<double, 4> goal;
+  array<double, 4> next_goal;
   array<double, 3> next_delta;
   array<double, 3> next_delta_unit;
 
@@ -201,7 +202,7 @@ int main(int argc, char** argv) {
   }
   robot.get_franka_robot().control([=, &time, &state, &time_goal, &time_state, 
                                         &q, &delta, &next_delta, &delta_unit, &next_delta_unit,
-                                        &goal, &next_goal, &pose, &gp, &rst](const franka::RobotState& robot_state,
+                                        &goal, &next_goal, &pose, &cur_velocity, &gp, &rst](const franka::RobotState& robot_state,
                                         franka::Duration period) -> franka::CartesianVelocities {
     time += period.toSec();
     time_goal += period.toSec();
@@ -230,7 +231,7 @@ int main(int argc, char** argv) {
       }
 
       // Fetching the next point from the decoder
-      array<double, 3> next;
+      array<double, 4> next;
       getEE(pose, next, sock, bs);
       for (int i = 0; i < 3; i++) {
         next[i] += cur[i];
@@ -246,6 +247,7 @@ int main(int argc, char** argv) {
         delta[i] = goal[i] - pose[12+i];
         norm += (delta[i] * delta[i]);
       }
+      cur_velocity = velocity_factor * goal[3];
       norm = sqrt(norm);
       for (int i = 0; i < 3; i++) {
         delta_unit[i] = delta[i] / norm;
@@ -267,8 +269,8 @@ int main(int argc, char** argv) {
       time_state = 0;
     }
 
-    // printf("state: %d, %f \n - current position: %f, %f, %f \n - cur goal: %f, %f, %f \n - Joystick: %d\n", 
-    //       state, time_state, cur[0], cur[1], cur[2], goal[0], goal[1], goal[2], bs);
+    printf("state: %d, %f \n - current position: %f, %f, %f \n - cur goal: %f, %f, %f \n - v_multiplier: %f, Joystick: %d\n", 
+          state, time_state, cur[0], cur[1], cur[2], goal[0], goal[1], goal[2], goal[3], bs);
 
     // State = 2 speeds up the robot's motion based on a cosine function which ensures smooth acceleration. The robot moves to state 3 and stops accelerating after a specific time.
     if (state == 2) {
@@ -276,7 +278,7 @@ int main(int argc, char** argv) {
         state = 3;
         time_state = 0;
       } else {
-        double v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI * time_state / reset_time)); // changed to 2pi since we want peak velocity to be at 0.5 progress instead of 1.0
+        double v = cur_velocity / 2.0 * (1.0 - std::cos(2.0 * M_PI * time_state / reset_time)); // changed to 2pi since we want peak velocity to be at 0.5 progress instead of 1.0
         double vx = v * delta_unit[0];
         double vy = v * delta_unit[1];
         double vz = v * delta_unit[2];
@@ -295,7 +297,7 @@ int main(int argc, char** argv) {
       }
       if (finished_traj(cur, goal, delta)) {
         printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
-        array<double, 3> next;
+        array<double, 4> next;
         getEE(pose, next, sock, bs);
         for (int i = 0; i < 3; i++) {
           next[i] = cur[i] + next[i];
@@ -329,7 +331,7 @@ int main(int argc, char** argv) {
         state = 4;
         time_state = 0;
       }
-      double v = velocity_factor / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
+      double v = cur_velocity / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
       double vx = v * delta_unit[0];
       double vy = v * delta_unit[1];
       double vz = v * delta_unit[2];
@@ -346,7 +348,7 @@ int main(int argc, char** argv) {
       }
       // Adding the phase shift of reset_time/2, starting the function at the point where the velocity would be at its maximum.
       // The robot would start slowing down immediately, ensuring a smooth deceleration until it stops
-      double v = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI * (time_state + reset_time/2) / reset_time));
+      double v = cur_velocity / 2.0 * (1.0 - cos(2.0 * M_PI * (time_state + reset_time/2) / reset_time));
       double vx = v * delta_unit[0];
       double vy = v * delta_unit[1];
       double vz = v * delta_unit[2];
@@ -364,9 +366,10 @@ int main(int argc, char** argv) {
         goal = next_goal;
         delta = next_delta;
         delta_unit = next_delta_unit;
+        cur_velocity = velocity_factor * next_goal[3];
       }
-      double v_slow = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI  * (time_state + reset_time/2) / reset_time));
-      double v_acc = velocity_factor / 2.0 * (1.0 - cos(2.0 * M_PI * time_state / reset_time));
+      double v_slow = cur_velocity / 2.0 * (1.0 - cos(2.0 * M_PI  * (time_state + reset_time/2) / reset_time));
+      double v_acc = (velocity_factor * next_goal[3]) / 2.0 * (1.0 - cos(2.0 * M_PI * time_state / reset_time));
       double vx = v_slow * delta_unit[0] + v_acc * next_delta_unit[0];
       double vy = v_slow * delta_unit[1] + v_acc * next_delta_unit[1];
       double vz = v_slow * delta_unit[2] + v_acc * next_delta_unit[2];
