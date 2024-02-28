@@ -48,6 +48,19 @@ void GamePad::run()
             // printf("Button %u %s\n", event.number, event.value ? "pressed" : "released");
             m_bs += 2 * (event.value - 0.5) * pow(2, event.number);
         }
+        if (event.type == JS_EVENT_AXIS)
+        {
+            lock_guard<mutex> lock(mMutex);
+            size_t axis = event.number / 2;
+
+            if (axis < 3)
+            {
+                if (event.number % 2 == 0)
+                    m_jsx = event.value;
+                else
+                    m_jsy = event.value;
+            }
+        }
         fflush(stdout);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -57,6 +70,8 @@ void GamePad::run_atomic()
 {
     struct js_event event;
     m_bs = atomic_int(0);
+    m_jsx = 0;
+    m_jsy = 0;
 
     while (readEvent(m_gp, &event) == 0)
     {
@@ -67,9 +82,28 @@ void GamePad::run_atomic()
             } else {
                 atomic_fetch_sub(&m_bsa, pow(2, event.number));
             }
+            fflush(stdout);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
         }
-        fflush(stdout);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (event.type == JS_EVENT_AXIS)
+        {
+            lock_guard<mutex> lock(mMutex);
+            size_t axis = event.number / 2;
+            size_t xy = event.number % 2;
+
+            if (axis < 3)
+            {
+                if (xy % 2 == 0)
+                    m_jsx = event.value;
+                else
+                    m_jsy = event.value;
+            }
+            // cout << axis << " ==> " << xy << " | " << m_jsx << ", " << m_jsy << endl;
+            fflush(stdout);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
     }
 }
 
@@ -93,6 +127,16 @@ size_t GamePad::getAxisState(struct js_event *event, struct axis_state axes[3])
             axes[axis].y = event->value;
     }
     return axis;
+}
+
+int GamePad::getAxisX()
+{
+    return m_jsx;
+}
+
+int GamePad::getAxisY()
+{
+    return m_jsy;
 }
 
 int GamePad::getButtonState()

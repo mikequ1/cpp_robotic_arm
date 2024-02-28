@@ -40,6 +40,10 @@ public:
 
     int getButtonState();
 
+    int getAxisX();
+
+    int getAxisY();
+
     int getButtonStateAtomic();
 
     void get_action();
@@ -69,6 +73,9 @@ private:
     Comms* m_c;
     /// @brief Abstraction of a GamePad device
     int m_gp;
+    /// @brief Joystick axis x state
+    int m_jsx;
+    int m_jsy;
     /// @brief Button State represented by binary (XABY = [0000]) 1=pressed, 0=released
     int m_bs;
     /// @brief GamePad status reading thread

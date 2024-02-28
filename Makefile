@@ -14,6 +14,7 @@ CXXFLAGS = -g -Wall -Wextra $(INCLUDE)
 SHARED_LIBRARIES = $(DIR)/libfranka/build/libfranka.so $(DIR)/liborl/build/liborl.so /usr/lib/x86_64-linux-gnu/libmpfr.so
 
 TARGET = move_continuous_wo_gripper
+# TARGET = calibration
 
 #==============================================#
 #                    MAIN                      #
@@ -45,6 +46,13 @@ move_continuous_wo_gripper.o: $(DIR)/tests/move_continuous_wo_gripper.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif
 
+ifeq ($(TARGET),calibration)
+calibration: examples_common.o calibration.o $(SHARED_LIBRARIES)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+calibration.o: $(DIR)/tests/calibration.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+endif
 
 
 ifeq ($(TARGET),move_continuous)
