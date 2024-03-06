@@ -84,62 +84,67 @@ bool reached_object(std::array<double, 3>& cur, std::array<double, 2>& obj, doub
   return false;
 }
 
-void sendState(std::array<double, 16>& ee_pose, int axis_x, int axis_y, int gs, int sock) {
+
+void getEE(std::array<double, 16>& ee_pose, std::array<double, 4>& nextpose, std::array<double, 2>& nextObj, int sock, int bs, int axis_x, int axis_y, int gs) {
   std::string state = "s,";
   for (int i = 0; i < 16; i++) {
     state.append(std::to_string(ee_pose[i]));
     state.append(",");
   }
+  state.append(std::to_string(bs)); //Button State
+  state.append(",");
   state.append(std::to_string(axis_x)); //Joystick X AXIS
   state.append(",");
   state.append(std::to_string(axis_y)); //Joystick Y AXIS
   state.append(",");
   state.append(std::to_string(gs));
+  state.append(",");
   char cstr[state.size() + 1];
   std::copy(state.begin(), state.end(), cstr);
   cstr[state.size()] = '\0';
   cout << "sent state" << endl;
   send(sock, cstr, strlen(cstr), 0); // send arm state to python.
-}
 
-bool getEE(std::array<double, 4>& nextpose, std::array<double, 2>& nextObj, int sock) {
   char buffer[200] = {0};
   int valread;
-  if (read(sock, buffer, 200) > 0){
-    std::stringstream ss(buffer);
-    bool first = false;
-    while (!first) {
-      std::string substr;
-      getline(ss, substr, ',');
-      if (substr[0] == 's') {
-        first = true;
-      }
+  while (true) {
+    // read data from python/buffer
+    valread = read(sock, buffer, 200);
+    std::this_thread::sleep_for(std::chrono::microseconds(20));
+    if (valread > 0) break;
+  }
+
+  std::stringstream ss(buffer);
+  bool first = false;
+  while (!first) {
+    std::string substr;
+    getline(ss, substr, ',');
+    if (substr[0] == 's') {
+      first = true;
     }
-    // X,Y,and Z directions
-    for (int i = 0; i < 3; i++) {
-      std::string substr;
-      getline(ss, substr, ',');
-      cout << substr << endl;
-      double term = std::stod(substr);
-      nextpose[i] = term;
-    }
-    // Velocity Multiplier
+  }
+  // X,Y,and Z directions
+  for (int i = 0; i < 3; i++) {
     std::string substr;
     getline(ss, substr, ',');
     cout << substr << endl;
     double term = std::stod(substr);
-    nextpose[3] = term;
-    // Highest-scored object XY Coordinates
-    for (int i = 0; i < 2; i++) {
-      std::string substr;
-      getline(ss, substr, ',');
-      cout << substr << endl;
-      double term = std::stod(substr);
-      nextObj[i] = term;
-    }
-    return true;
+    nextpose[i] = term;
   }
-  return false;
+  // Velocity Multiplier
+  std::string substr;
+  getline(ss, substr, ',');
+  cout << substr << endl;
+  double term = std::stod(substr);
+  nextpose[3] = term;
+  // Highest-scored object XY Coordinates
+  for (int i = 0; i < 2; i++) {
+    std::string substr;
+    getline(ss, substr, ',');
+    cout << substr << endl;
+    double term = std::stod(substr);
+    nextObj[i] = term;
+  }
 }
 
 int connect2control(int PORT) {
@@ -191,11 +196,9 @@ int main(int argc, char** argv) {
   // Queue initialization for EE coordinates
   queue<array<double, 4>> q;
 
-  // previously: 0.17
-  double reset_time = 0.24;
+  double reset_time = 0.17;
   double velocity_factor = V_FACTOR;
   double cur_velocity = 0;
-  bool received_cmd = false;
 
   std::array<double, 16> pose;
   array<double, 3> delta;
@@ -226,7 +229,7 @@ int main(int argc, char** argv) {
     cout << "Control loop starting" << endl;
     robot.get_franka_robot().control([=, &time, &state, &time_goal, &time_state, 
                                           &q, &delta, &next_delta, &delta_unit, &next_delta_unit, &next_obj,&gripper_state,
-                                          &goal, &next_goal, &pose, &cur_velocity, &gp, &rst, &received_cmd](const franka::RobotState& robot_state,
+                                          &goal, &next_goal, &pose, &cur_velocity, &gp, &rst](const franka::RobotState& robot_state,
                                           franka::Duration period) -> franka::CartesianVelocities {
       time += period.toSec();
       time_goal += period.toSec();
@@ -259,12 +262,7 @@ int main(int argc, char** argv) {
         // Fetching the next point from the decoder
         array<double, 4> next;
         //char buffer[200] = {0};
-        sendState(pose, axis_x, axis_y, gripper_state, sock);
-        while (true) {
-          // read data from python/buffer
-          if (getEE(next, next_obj, sock)) break;
-          std::this_thread::sleep_for(std::chrono::microseconds(20));
-        }
+        getEE(pose, next, next_obj, sock, bs, axis_x, axis_y, gripper_state);
         for (int i = 0; i < 3; i++) {
           next[i] += cur[i];
         }
@@ -300,10 +298,7 @@ int main(int argc, char** argv) {
       }
 
       printf("state: %d, %f, %f \n - current position: %f, %f, %f \n - cur goal: %f, %f, %f \n - v_multiplier: %f, Joystick: %d, Gripper: %d\n", 
-            state, time_state, time, 
-            cur[0], cur[1], cur[2], 
-            goal[0], goal[1], goal[2], 
-            goal[3], bs, gripper_state);
+            state, time_state, time, cur[0], cur[1], cur[2], goal[0], goal[1], goal[2], goal[3], bs, gripper_state);
 
       // State = 2 speeds up the robot's motion based on a cosine function which ensures smooth acceleration. The robot moves to state 3 and stops accelerating after a specific time.
       if (state == 2) {
@@ -328,28 +323,46 @@ int main(int argc, char** argv) {
           state = 4;
           time_state = 0;
         }
-        // If the gripper is open and we are close enough to an object, end control loop and engage gripper
         if (time>3.0 && (reached_object(cur, next_obj, 0.015)&& cur[2] < 0) && gripper_state == -1) {
           cout << "REACHED OBJECT for grasp" << endl;
           state = 4;
           time_state = 0;
           gripper_state = 2;
-        // If the gripper is closed and we are close enough to an object, end control loop and release gripper
         } else if (time >3.0 && (reached_object(cur, next_obj, 0.015) && cur[2] < 0) && gripper_state == 1){
           cout << "REACHED OBJECT for release" << endl;
           state = 4;
           time_state = 0;
           gripper_state = 3;
         }
-        // If we have reached the end of the current point-to-point movement, we begin slowing down and request
-        // a new position from the python script
         if (finished_traj(cur, goal, delta)) {
           printf("Reached point %f, %f, %f \n", cur[0], cur[1], cur[2]);
-          sendState(pose, axis_x, axis_y, gripper_state, sock);
-          received_cmd = false;
-          state = 5;
-          time_state = 0;
-          time_goal = 0;
+          array<double, 4> next;
+          getEE(pose, next, next_obj, sock, bs, axis_x, axis_y, gripper_state);
+          for (int i = 0; i < 3; i++) {
+            next[i] = cur[i] + next[i];
+          }
+          q.push(next);
+          if (q.size() == 0) {
+            state = 4;
+            time_state = 0;
+          } else {
+            state = 5;
+            time_state = 0;
+            next_goal = q.front();
+            q.pop();
+
+            // Adjusts the computed direction and distance to the next goal by accounting for anticipated motion 
+            // (0.05 * reset_time * delta_unit[i]) in the robot's current movement direction over a specified time duration.
+            double norm = 0;
+            for (int i = 0; i < 3; i++) {
+              next_delta[i] = next_goal[i] - pose[12+i] - (0.05 * reset_time * delta_unit[i]);
+              norm += (next_delta[i] * next_delta[i]);
+            }
+            norm = sqrt(norm);
+            for (int i = 0; i < 3; i++) {
+              next_delta_unit[i] = next_delta[i] / norm;
+            }
+          }
         }
         // if out of bound, stop execution
         if (cur[2] < MIN_Z) {
@@ -361,7 +374,6 @@ int main(int argc, char** argv) {
         double vx = v * delta_unit[0];
         double vy = v * delta_unit[1];
         double vz = v * delta_unit[2];
-        cout << v << "| " << vx << ", " << vy << ", " << vz << endl;
         output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
         return output;
       }
@@ -389,59 +401,7 @@ int main(int argc, char** argv) {
 
       // state = 5: the robot smoothly transitions between reaching one point and accelerating towards the next point.
       if (state == 5) {
-        // If we have not received back from python script, we do not keep track of new goal's time
-        if (!received_cmd)
-          time_goal = 0;
-        // Slowing down the old velocity, unless it is done slowing down
-        double v_slow = cur_velocity / 2.0 * (1.0 - cos(2.0 * M_PI  * (time_state + reset_time/2) / reset_time));
-        if (time_state >= reset_time / 2)
-          v_slow = 0;
-        // Accelerate the new velocity, unless the new velocity hasn't been obtained yet
-        double v_acc = (velocity_factor * next_goal[3]) / 2.0 * (1.0 - cos(2.0 * M_PI * time_goal / reset_time));
-        if (!received_cmd)
-          v_acc = 0;
-
-        // Attempt to read from the python script
-        array<double, 4> next;
-        if (getEE(next, next_obj, sock)){
-          received_cmd = true;
-          cout << "Received Command" << endl;
-          time_goal = 0;
-          for (int i = 0; i < 3; i++) {
-            next[i] = cur[i] + next[i];
-          }
-          q.push(next);
-          if (q.size() == 0) {
-            state = 4;
-          } else {
-            state = 5;
-            time_state = 0;
-            next_goal = q.front();
-            q.pop();
-
-            // Adjusts the computed direction and distance to the next goal by accounting for anticipated motion 
-            // (0.05 * reset_time * delta_unit[i]) in the robot's current movement direction over a specified time duration.
-            double norm = 0;
-            for (int i = 0; i < 3; i++) {
-              next_delta[i] = next_goal[i] - pose[12+i] - (0.05 * reset_time * delta_unit[i]);
-              norm += (next_delta[i] * next_delta[i]);
-            }
-            norm = sqrt(norm);
-            for (int i = 0; i < 3; i++) {
-              next_delta_unit[i] = next_delta[i] / norm;
-            }
-          }
-        }
-        
-        double vx = v_slow * delta_unit[0] + v_acc * next_delta_unit[0];
-        double vy = v_slow * delta_unit[1] + v_acc * next_delta_unit[1];
-        double vz = v_slow * delta_unit[2] + v_acc * next_delta_unit[2];
-
-        cout << v_slow << ", " << v_acc << "| " << vx << ", " << vy << ", " << vz << endl;
-
-        output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
-        // The new goal has completed acceleration, move to state 3 to travel at constant velocity
-        if (time_goal >= reset_time / 2) {
+        if (time_state >= reset_time / 2) {
           state = 3;
           time_state = 0;
 
@@ -450,6 +410,13 @@ int main(int argc, char** argv) {
           delta_unit = next_delta_unit;
           cur_velocity = velocity_factor * next_goal[3];
         }
+        double v_slow = cur_velocity / 2.0 * (1.0 - cos(2.0 * M_PI  * (time_state + reset_time/2) / reset_time));
+        double v_acc = (velocity_factor * next_goal[3]) / 2.0 * (1.0 - cos(2.0 * M_PI * time_state / reset_time));
+        double vx = v_slow * delta_unit[0] + v_acc * next_delta_unit[0];
+        double vy = v_slow * delta_unit[1] + v_acc * next_delta_unit[1];
+        double vz = v_slow * delta_unit[2] + v_acc * next_delta_unit[2];
+
+        output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
         return output;
       }
       if (time >= 60) {
@@ -458,8 +425,6 @@ int main(int argc, char** argv) {
       }
       return output;
     });
-
-
     if (gripper_state == 2) {
       robot.absolute_cart_motion(next_obj[0],next_obj[1],-0.066,1.2);
       if (robot.get_franka_gripper().grasp(0.025, 0.03, 10, 0.01, 0.015)){
