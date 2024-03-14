@@ -39,6 +39,7 @@ void GamePad::run()
 {
     struct js_event event;
     m_bs = 0;
+    buttons_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     while (readEvent(m_gp, &event) == 0)
     {
@@ -47,6 +48,7 @@ void GamePad::run()
             lock_guard<mutex> lock(mMutex);
             // printf("Button %u %s\n", event.number, event.value ? "pressed" : "released");
             m_bs += 2 * (event.value - 0.5) * pow(2, event.number);
+            buttons_state[(int)event.number] = 1;
         }
         if (event.type == JS_EVENT_AXIS)
         {
@@ -72,6 +74,7 @@ void GamePad::run_atomic()
     m_bs = atomic_int(0);
     m_jsx = 0;
     m_jsy = 0;
+    buttons_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     while (readEvent(m_gp, &event) == 0)
     {
@@ -79,8 +82,10 @@ void GamePad::run_atomic()
         {
             if (event.value == 1){
                 atomic_fetch_add(&m_bsa, pow(2, event.number));
+                buttons_state[(int)event.number] = 1;
             } else {
                 atomic_fetch_sub(&m_bsa, pow(2, event.number));
+                buttons_state[(int)event.number] = 0;
             }
             fflush(stdout);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -142,6 +147,14 @@ int GamePad::getAxisY()
 int GamePad::getButtonState()
 {
     return m_bs;
+}
+
+int GamePad::getButtonState(int button_idx)
+{
+    if (button_idx < 0) {
+        return 0;
+    }
+    return buttons_state[button_idx];
 }
 
 int GamePad::getButtonStateAtomic()

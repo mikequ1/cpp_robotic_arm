@@ -22,6 +22,7 @@
 #include <liborl/liborl.h>
 
 #include "GamePad.h"
+#include "TCPPad.h"
 
 using namespace std;
 
@@ -38,6 +39,8 @@ static const int S_TO_MS = 1000;
 static const double MIN_Z = -0.07;
 static const double MIN_DZ = -0.005;
 static const double V_FACTOR = 0.05; // in m/s
+static const double MAX_SPEED = 0.05; // in m/s
+static const double MAX_ACCEL = 0.001; // derivative of velocity.
 static const char *DEVICE_PATH = "/dev/input/js0";
 
 
@@ -82,6 +85,27 @@ bool reached_object(std::array<double, 3>& cur, std::array<double, 2>& obj, doub
     return true;
   }
   return false;
+}
+double sum(std::array<double, 3> &arr) {
+  double out = 0.0;
+  for (int i=0; i<3; ++i) {
+    out += arr[i];
+  }
+  return out;
+}
+double l2_norm(std::array<double, 3> &vec) {
+  array<double, 3> vec_sq = {0.0, 0.0, 0.0};
+  for (int i=0; i<3; ++i) {
+    vec_sq[i] = pow(vec[i], 2);
+  }
+  return sqrt(sum(vec_sq));
+}
+double l2_distance(std::array<double, 3>& pt_a, std::array<double, 3>& pt_b) {
+  array<double, 3> displacement = {0.0, 0.0, 0.0};
+  for (int i=0; i<3; ++i) {
+    displacement[i] = pt_b[i] - pt_a[i];
+  }
+  return l2_norm(displacement);
 }
 
 void sendState(std::array<double, 16>& ee_pose, int axis_x, int axis_y, int gs, int sock) {
@@ -174,9 +198,18 @@ int main(int argc, char** argv) {
   // int port = std::stoi(argv[1]);
   int port = 53821;
 
+  char* IP;
+  if(argc > 1) {
+      IP = argv[1];
+  } else {
+      IP = "10.0.1.8";
+  }
+
   // Joystick Connection
   GamePad *gp = new GamePad(DEVICE_PATH);
+  TCPPad *tp = new TCPPad(IP);
   gp->startThread();
+  tp->startThread();
 
   // Connecting to the robot and resetting to home position
   orl::Robot robot("172.16.0.2");
@@ -198,7 +231,8 @@ int main(int argc, char** argv) {
   bool received_cmd = false;
 
   std::array<double, 16> pose;
-  array<double, 3> delta;
+  array<double, 3> delta = {0, 0, 0};
+  array<double, 3> prev_delta = {0, 0, 0};
   array<double, 3> delta_unit;
   array<double, 4> goal;
   array<double, 4> next_goal;
@@ -225,18 +259,19 @@ int main(int argc, char** argv) {
     }
     cout << "Control loop starting" << endl;
     robot.get_franka_robot().control([=, &time, &state, &time_goal, &time_state, 
-                                          &q, &delta, &next_delta, &delta_unit, &next_delta_unit, &next_obj,&gripper_state,
-                                          &goal, &next_goal, &pose, &cur_velocity, &gp, &rst, &received_cmd](const franka::RobotState& robot_state,
+                                          &q, &delta, &prev_delta, &next_delta, &delta_unit, &next_delta_unit, &next_obj,&gripper_state,
+                                          &goal, &next_goal, &pose, &cur_velocity, &gp, &tp, &rst, &received_cmd](const franka::RobotState& robot_state,
                                           franka::Duration period) -> franka::CartesianVelocities {
       time += period.toSec();
       time_goal += period.toSec();
       time_state += period.toSec();
 
       int bs = gp->getButtonStateAtomic();
-      int axis_x = gp->getAxisX();
-      int axis_y = gp->getAxisY();
-      array<double, 3> cur;
-      franka::CartesianVelocities output = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+      int axis_x = tp->getAxisX();
+      int axis_y = tp->getAxisY();
+      //cout << axis_x << "," << axis_y << endl;
+      array<double, 3> cur; // current position
+      franka::CartesianVelocities output = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}}; // xv, vy, vz, omega_x, omega_y, omega_z
 
       pose = robot_state.O_T_EE_c; // pose[12] = x, pose[13] = y, pose[14] = z
       for (int i = 0; i < 3; i++) {
@@ -258,7 +293,6 @@ int main(int argc, char** argv) {
 
         // Fetching the next point from the decoder
         array<double, 4> next;
-        //char buffer[200] = {0};
         sendState(pose, axis_x, axis_y, gripper_state, sock);
         while (true) {
           // read data from python/buffer
@@ -279,12 +313,17 @@ int main(int argc, char** argv) {
           delta[i] = goal[i] - pose[12+i];
           norm += (delta[i] * delta[i]);
         }
+        
+
         cur_velocity = velocity_factor * goal[3];
+
+
         norm = sqrt(norm);
         for (int i = 0; i < 3; i++) {
-          delta_unit[i] = delta[i] / norm;
+          delta_unit[i] = delta[i] / norm; // this is a problem because it rescales all velocities. TO FIX
         }
-        // If the next point is out of bounds, we ignore the point
+        // If the next point z is out of bounds, we ignore the point
+        // TODO: set bounds for x and y and upper bound for z.
         if ((goal[2] < MIN_Z) && (cur[2] < MIN_Z)) {
           cout << "End Effector is at z-level boundaries: goal = " << goal[2] << ", current = " << cur[2] << endl;
           time_goal = 0;
@@ -299,6 +338,31 @@ int main(int argc, char** argv) {
         time_state = 0;
       }
 
+      // delta corresponds to the desired velocity
+      // prev_delta corresponds to the previous velocity.
+      // Here we ensure that the new delta is within a radius of prev_delta
+      // requires: delta and prev_delta
+      array<double, 3> filtered_delta = {0, 0, 0};
+      array<double, 3> ddelta = {0, 0, 0}; // difference in delta
+      for (int i=0; i<3; ++i) {
+        ddelta[i] = delta[i] - prev_delta[i];
+      }
+      double ddelta_magnitude = l2_norm(ddelta);
+      if (ddelta_magnitude <= MAX_ACCEL) {
+        for (int i=0; i<3; ++i) {
+          filtered_delta[i] = delta[i];
+        }
+      } else {
+        double prop = MAX_ACCEL / ddelta_magnitude; // proportion corresponding to prev_delta
+        for (int i=0; i<3; ++i) {
+          filtered_delta[i] = prop*prev_delta[i] + (1 - prop)*delta[i];
+        }
+      }
+      for (int i=0; i<3; ++i) {
+        prev_delta[i] = delta[i];
+        filtered_delta[i] = 0.4*filtered_delta[i]; //todo: use goal[3] (i.e. velocity multiplier)
+      }
+
       printf("state: %d, %f, %f \n - current position: %f, %f, %f \n - cur goal: %f, %f, %f \n - v_multiplier: %f, Joystick: %d, Gripper: %d\n", 
             state, time_state, time, 
             cur[0], cur[1], cur[2], 
@@ -311,10 +375,15 @@ int main(int argc, char** argv) {
           state = 3;
           time_state = 0;
         } else {
-          double v = cur_velocity / 2.0 * (1.0 - std::cos(2.0 * M_PI * time_state / reset_time)); // changed to 2pi since we want peak velocity to be at 0.5 progress instead of 1.0
-          double vx = v * delta_unit[0];
-          double vy = v * delta_unit[1];
-          double vz = v * delta_unit[2];
+          /* CHANGED: limit velocities to a radius around the previous velocity. */
+
+          //double v = cur_velocity / 2.0 * (1.0 - std::cos(2.0 * M_PI * time_state / reset_time)); // changed to 2pi since we want peak velocity to be at 0.5 progress instead of 1.0
+          //double vx = v * delta_unit[0];
+          //double vy = v * delta_unit[1];
+          //double vz = v * delta_unit[2];
+          double vx = filtered_delta[0];
+          double vy = filtered_delta[1];
+          double vz = filtered_delta[2];
           output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
           return output;
         }
@@ -327,6 +396,12 @@ int main(int argc, char** argv) {
         if (bs == 0 && axis_x == 0 && axis_y == 0){
           state = 4;
           time_state = 0;
+        }
+        if (bs == 16) {
+          rst = 1;
+          state = 4;
+          time_state = 0;
+          cout << "Resetting arm..." << endl;
         }
         // If the gripper is open and we are close enough to an object, end control loop and engage gripper
         if (time>3.0 && (reached_object(cur, next_obj, 0.015)&& cur[2] < 0) && gripper_state == -1) {
@@ -357,11 +432,18 @@ int main(int argc, char** argv) {
           state = 4;
           time_state = 0;
         }
-        double v = cur_velocity / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
-        double vx = v * delta_unit[0];
-        double vy = v * delta_unit[1];
-        double vz = v * delta_unit[2];
-        cout << v << "| " << vx << ", " << vy << ", " << vz << endl;
+
+        /* CHANGED: limit velocities to a radius around the previous velocity. */
+
+        // double v = cur_velocity / 2.0 * (1.0 - std::cos(2.0 * M_PI * (reset_time / 2) / reset_time)); // makes velocity go at a constant value
+        // double vx = v * delta_unit[0];
+        // double vy = v * delta_unit[1];
+        // double vz = v * delta_unit[2];
+        double vx = filtered_delta[0];
+        double vy = filtered_delta[1];
+        double vz = filtered_delta[2];
+        //cout << v << "| " << vx << ", " << vy << ", " << vz << endl;
+        cout << vx << ", " << vy << ", " << vz << endl;
         output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
         return output;
       }
@@ -378,10 +460,13 @@ int main(int argc, char** argv) {
         }
         // Adding the phase shift of reset_time/2, starting the function at the point where the velocity would be at its maximum.
         // The robot would start slowing down immediately, ensuring a smooth deceleration until it stops
-        double v = cur_velocity / 2.0 * (1.0 - cos(2.0 * M_PI * (time_state + reset_time/2) / reset_time));
-        double vx = v * delta_unit[0];
-        double vy = v * delta_unit[1];
-        double vz = v * delta_unit[2];
+        // double v = cur_velocity / 2.0 * (1.0 - cos(2.0 * M_PI * (time_state + reset_time/2) / reset_time));
+        // double vx = v * delta_unit[0];
+        // double vy = v * delta_unit[1];
+        // double vz = v * delta_unit[2];
+        double vx = filtered_delta[0];
+        double vy = filtered_delta[1];
+        double vz = filtered_delta[2];
         output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
 
         return output;
@@ -433,11 +518,15 @@ int main(int argc, char** argv) {
           }
         }
         
-        double vx = v_slow * delta_unit[0] + v_acc * next_delta_unit[0];
-        double vy = v_slow * delta_unit[1] + v_acc * next_delta_unit[1];
-        double vz = v_slow * delta_unit[2] + v_acc * next_delta_unit[2];
+        // double vx = v_slow * delta_unit[0] + v_acc * next_delta_unit[0];
+        // double vy = v_slow * delta_unit[1] + v_acc * next_delta_unit[1];
+        // double vz = v_slow * delta_unit[2] + v_acc * next_delta_unit[2];
 
-        cout << v_slow << ", " << v_acc << "| " << vx << ", " << vy << ", " << vz << endl;
+        //cout << v_slow << ", " << v_acc << "| " << vx << ", " << vy << ", " << vz << endl;
+
+        double vx = filtered_delta[0];
+        double vy = filtered_delta[1];
+        double vz = filtered_delta[2];
 
         output = {{vx, vy, vz, 0.0, 0.0, 0.0}};
         // The new goal has completed acceleration, move to state 3 to travel at constant velocity
@@ -462,7 +551,8 @@ int main(int argc, char** argv) {
 
     if (gripper_state == 2) {
       robot.absolute_cart_motion(next_obj[0],next_obj[1],-0.066,1.2);
-      if (robot.get_franka_gripper().grasp(0.025, 0.03, 10, 0.01, 0.015)){
+      double force = 18;
+      if (robot.get_franka_gripper().grasp(0.025, 0.03, force, 0.01, 0.015)){
         gripper_state = 1;
         cout << "Object Grasped" << endl;
       } else {
@@ -472,7 +562,7 @@ int main(int argc, char** argv) {
         cout << "Object unable to be Grasped" << endl;
         robot.get_franka_gripper().move(gripper_read.max_width, 0.05);
       }
-      robot.absolute_cart_motion(next_obj[0],next_obj[1],0.08,2.0);
+      robot.absolute_cart_motion(next_obj[0],next_obj[1],0.08,2.5);
     } else if (gripper_state == 3) {
       robot.absolute_cart_motion(next_obj[0],next_obj[1],-0.065,1.2);
       franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
@@ -483,10 +573,11 @@ int main(int argc, char** argv) {
         gripper_state = 1;
         cout << "Object unable to be Released" << endl;
       }
-      robot.absolute_cart_motion(next_obj[0],next_obj[1],0.08,2.0);
+      robot.absolute_cart_motion(next_obj[0],next_obj[1],0.08,2.5);
     }
 
   }
+  tp->shutdown();
 
   return 0;
 }

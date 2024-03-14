@@ -11,22 +11,43 @@
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
 
+// Networking libraries
+#include <unistd.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h> // for disabling nagle buffering
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <errno.h>
+
 using namespace std;
 
-TCPPad::TCPPad(const char *device)
+TCPPad::TCPPad(const char *ip)
 {
-    cout << "TCPPad initialized" << endl;
-    m_gp = open(device, O_RDONLY);
+    //int sockfd;
+    if ((tcp_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed.");
+    }
 
-    if (m_gp == -1)
-        perror("Could not open joystick");
+    struct sockaddr_in servaddr;
+    memset(&servaddr, 0, sizeof(servaddr));
+
+    int port = 7879;
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(port);
+    servaddr.sin_addr.s_addr = inet_addr(ip);
+    // Connect to the server
+    if (connect(tcp_fd, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0) {
+        close(tcp_fd);
+        perror("Failed to connect to socket.");
+    }
+    cout << "TCPPad initialized" << " at " << tcp_fd << endl;
 };
 
 TCPPad::~TCPPad()
 {
     cout << "Calling TCPPad destructor" << endl;
     mThread.join();
-    close(m_gp);
+    close(tcp_fd);
 }
 
 void TCPPad::startThread()
@@ -73,38 +94,79 @@ void TCPPad::run_atomic()
     m_jsx = 0;
     m_jsy = 0;
 
-    while (readEvent(m_gp, &event) == 0)
+    while (!is_shutdown)
     {
-        if (event.type == JS_EVENT_BUTTON)
+        //cout << "run_atomic" << endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        int bytes = recv(tcp_fd, &buf[buf_pos], sizeof(buf) - buf_pos, 0);
+        if (bytes < 0)
         {
-            if (event.value == 1){
-                atomic_fetch_add(&m_bsa, pow(2, event.number));
-            } else {
-                atomic_fetch_sub(&m_bsa, pow(2, event.number));
-            }
-            fflush(stdout);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // if no data is available to be read.
+            cout << "Error: " << strerror(errno) << endl;
             continue;
         }
-        if (event.type == JS_EVENT_AXIS)
+        size_t total_bytes = (bytes + buf_pos);
+        size_t nDouble = total_bytes / __SIZEOF_DOUBLE__;
+        if (nDouble < 2)
         {
-            lock_guard<mutex> lock(mMutex);
-            size_t axis = event.number / 2;
-            size_t xy = event.number % 2;
-
-            if (axis < 3)
-            {
-                if (xy % 2 == 0)
-                    m_jsx = event.value;
-                else
-                    m_jsy = event.value;
-            }
-            // cout << axis << " ==> " << xy << " | " << m_jsx << ", " << m_jsy << endl;
-            fflush(stdout);
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
+        }
+        // Grab most recent pair of doubles. Ignore previous values.
+        size_t start = 2 * (nDouble / 2) - 2;
+        double * double_ptr = (double *) &buf[0];
+        double jsx_d = double_ptr[start];
+        double jsy_d = double_ptr[start + 1];
+        double SCALE = 30000; //32768;
+        //double SCALE = 16384;
+        m_jsx = (int)(SCALE*jsx_d);
+        m_jsy = (int)(SCALE*jsy_d);
+        //cout << m_jsx << "," << m_jsy << endl;
+
+        size_t bytes_used = (start + 2) * __SIZEOF_DOUBLE__;
+        // Move the unused bytes to the beginning of the buffer.
+        buf_pos = (int)total_bytes - (int)bytes_used;
+        for(int i=0; i < buf_pos; ++i) 
+        {
+            buf[i] = buf[i+bytes_used];
         }
     }
+    
+    //int m_jsx;
+    //int m_jsy;
+
+    // while (readEvent(m_gp, &event) == 0)
+    // {
+    //     if (event.type == JS_EVENT_BUTTON)
+    //     {
+    //         if (event.value == 1){
+    //             atomic_fetch_add(&m_bsa, pow(2, event.number));
+    //         } else {
+    //             atomic_fetch_sub(&m_bsa, pow(2, event.number));
+    //         }
+    //         fflush(stdout);
+    //         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    //         continue;
+    //     }
+    //     if (event.type == JS_EVENT_AXIS)
+    //     {
+    //         lock_guard<mutex> lock(mMutex);
+    //         size_t axis = event.number / 2;
+    //         size_t xy = event.number % 2;
+
+    //         if (axis < 3)
+    //         {
+    //             if (xy % 2 == 0)
+    //                 m_jsx = event.value;
+    //             else
+    //                 m_jsy = event.value;
+    //         }
+    //         // cout << axis << " ==> " << xy << " | " << m_jsx << ", " << m_jsy << endl;
+    //         fflush(stdout);
+    //         std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    //         continue;
+    //     }
+    // }
+    return;
 }
 
 int TCPPad::readEvent(int fd, struct js_event *event)
@@ -116,18 +178,18 @@ int TCPPad::readEvent(int fd, struct js_event *event)
     return -1;
 }
 
-size_t TCPPad::getAxisState(struct js_event *event, struct axis_state axes[3])
-{
-    size_t axis = event->number / 2;
-    if (axis < 3)
-    {
-        if (event->number % 2 == 0)
-            axes[axis].x = event->value;
-        else
-            axes[axis].y = event->value;
-    }
-    return axis;
-}
+// size_t TCPPad::getAxisState(struct js_event *event, struct axis_state axes[3])
+// {
+//     size_t axis = event->number / 2;
+//     if (axis < 3)
+//     {
+//         if (event->number % 2 == 0)
+//             axes[axis].x = event->value;
+//         else
+//             axes[axis].y = event->value;
+//     }
+//     return axis;
+// }
 
 int TCPPad::getAxisX()
 {
@@ -160,4 +222,9 @@ void TCPPad::get_action()
     rapidjson::StringBuffer strbuf;
     rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
     document.Accept(writer);
+}
+
+void TCPPad::shutdown()
+{
+    is_shutdown = 1;
 }

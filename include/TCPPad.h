@@ -6,10 +6,10 @@
 
 #include "Comms.h"
 
-struct axis_state
-{
-    short x, y;
-};
+// struct axis_state
+// {
+//     short x, y;
+// };
 
 class TCPPad
 {
@@ -19,7 +19,7 @@ public:
      *
      * @param device Device path e.g. /dev/input/js0
      */
-    TCPPad(const char *device);
+    TCPPad(const char *ip);
 
     /// @brief Destructor
     virtual ~TCPPad();
@@ -48,6 +48,8 @@ public:
 
     void get_action();
 
+    void shutdown();
+
 private:
     /**
      * @brief read a current button event
@@ -65,12 +67,17 @@ private:
      * @param axes struct representing joystick position on each axis
      * @return size_t returns the axis that the event indicated.
      */
-    size_t getAxisState(struct js_event *event, struct axis_state axes[3]);
+    //size_t getAxisState(struct js_event *event, struct axis_state axes[3]);
 
     std::atomic<int> m_bsa;
 
     /// @brief socket comms object
     Comms* m_c;
+    /// @brief TCP file descriptor
+    int tcp_fd;
+    /// @brief TCP buffer
+    char* buf[8192];
+    int buf_pos = 0;
     /// @brief Abstraction of a GamePad device
     int m_gp;
     /// @brief Joystick axis x state
@@ -82,4 +89,6 @@ private:
     std::thread mThread;
     /// @brief Mutex protecting the button state (XYAB)
     std::mutex mMutex;
+    /// closed state
+    int is_shutdown = 0;
 };

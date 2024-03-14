@@ -39,6 +39,7 @@ public:
     void run_atomic();
 
     int getButtonState();
+    int getButtonState(int button_idx);
 
     int getAxisX();
 
@@ -68,6 +69,7 @@ private:
     size_t getAxisState(struct js_event *event, struct axis_state axes[3]);
 
     std::atomic<int> m_bsa;
+    std::array<int, 10> buttons_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     /// @brief socket comms object
     Comms* m_c;
