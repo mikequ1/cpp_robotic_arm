@@ -261,6 +261,25 @@ void sendState(std::array<double, 16>& ee_pose, int axis_x, int axis_y, int gs, 
   cout << "sent state" << endl;
   send(sock, cstr, strlen(cstr), 0); // send arm state to python.
 }
+void sendState(std::array<double, 16>& ee_pose, int axis_x, int axis_y, int gs, int rst, int sock) {
+  std::string state = "s,";
+  for (int i = 0; i < 16; i++) {
+    state.append(std::to_string(ee_pose[i]));
+    state.append(",");
+  }
+  state.append(std::to_string(axis_x)); //Joystick X AXIS
+  state.append(",");
+  state.append(std::to_string(axis_y)); //Joystick Y AXIS
+  state.append(",");
+  state.append(std::to_string(gs));
+  state.append(",");
+  state.append(std::to_string(rst));
+  char cstr[state.size() + 1];
+  std::copy(state.begin(), state.end(), cstr);
+  cstr[state.size()] = '\0';
+  cout << "sent state" << endl;
+  send(sock, cstr, strlen(cstr), 0); // send arm state to python.
+}
 
 bool getEE(std::array<double, 4>& nextpose, std::array<double, 2>& nextObj, int sock) {
   char buffer[200] = {0};
@@ -433,10 +452,12 @@ int main(int argc, char** argv) {
   int prev_start_bs = 0;
   bool allow_movement = false;
   int rst = 1;
+  int finished_rst_buffer = rst;
   bool reset_initiated = false;
 
   // send state once at the beginning to initiate communication.
-  sendState(pose, 0, 0, gripper_state, sock);
+  // sendState(pose, 0, 0, gripper_state, sock);
+  sendState(pose, 0, 0, gripper_state, 0, sock);
 
   while (true) {
     time = 0.0;
@@ -448,6 +469,7 @@ int main(int argc, char** argv) {
       franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
       cout << "MAX gripper width is: " << gripper_read.max_width << endl;
       rst = 0;
+      finished_rst_buffer = 1;
       allow_movement = false;
     }
     
@@ -457,7 +479,7 @@ int main(int argc, char** argv) {
     robot.get_franka_robot().control([=, &time, &state, &time_goal, &time_state, &last_grasp_time, &set_last_grasp_time,
                                           &reset_initiated, &allow_movement, &prev_start_bs,
                                           &q, &delta, &prev_delta, &prev_accel, &next_delta, &delta_unit, &next_delta_unit, &next_obj,&gripper_state, &gripper_state_buffer,
-                                          &goal, &next_goal, &pose, &cur_velocity, &gp, &tp, &rst, &received_cmd](const franka::RobotState& robot_state,
+                                          &goal, &next_goal, &pose, &cur_velocity, &gp, &tp, &rst, &finished_rst_buffer, &received_cmd](const franka::RobotState& robot_state,
                                           franka::Duration period) -> franka::CartesianVelocities {
       double delta_t = period.toSec();
       time += period.toSec();
@@ -559,6 +581,16 @@ int main(int argc, char** argv) {
 
       if (start_bs == 1 && prev_start_bs == 0) {
         allow_movement = (!allow_movement);
+
+        // Stop sending finished_reset when you allow movement.
+        // This is used so that the Python process knows when the robot is
+        // reset but has not yet commenced movement.
+        // THIS WILL FAIL IF YOU HOLD DOWN START DURING RESET.
+        // i.e. unpressed -> reset started -> pressed -> reset finished (-> unpressed)
+        // will cause the finished_reset signal to never be sent.
+        if (allow_movement) {
+          finished_rst_buffer = 0;
+        }
       }
       prev_start_bs = start_bs; // must be after every reference to prev_start_bs
 
@@ -669,6 +701,7 @@ int main(int argc, char** argv) {
           cout << "Sending reset signal" << endl;
           reset_initiated = false;
           rst = 1;
+          //finished_rst_buffer = rst;
           send_finished = true;
         }
       } else if (goal_reached && l2_norm(last_translational_vel) <= 1.0e-3) {
@@ -688,15 +721,23 @@ int main(int argc, char** argv) {
       // THIS MUST BE BEFORE ANY RETURN STATEMENT.
       if (got_new_control) {
         // Ensure that gripper state values of 2 and 3 are sent at least once.
+        int gs_to_send = gripper_state;
+        int rst_to_send = 0;
+        if (finished_rst_buffer == 1) {
+          //sendState(pose, axis_x, axis_y, gripper_state_buffer, sock);
+          rst_to_send = finished_rst_buffer;
+          //finished_rst_buffer = 0;
+        }
         if (gripper_state_buffer == 2) {
-          sendState(pose, axis_x, axis_y, gripper_state_buffer, sock);
+          //sendState(pose, axis_x, axis_y, gripper_state_buffer, sock);
+          gs_to_send = gripper_state_buffer;
           gripper_state_buffer = 1;
         } else if (gripper_state_buffer == 3) {
-          sendState(pose, axis_x, axis_y, gripper_state_buffer, sock);
+          //sendState(pose, axis_x, axis_y, gripper_state_buffer, sock);
+          gs_to_send = gripper_state_buffer;
           gripper_state_buffer = -1;
-        } else {
-          sendState(pose, axis_x, axis_y, gripper_state, sock);
-        }
+        } else {}
+        sendState(pose, axis_x, axis_y, gs_to_send, rst_to_send, sock);
       }
 
       if (send_finished) {
