@@ -63,6 +63,14 @@ array<double, 6> ROBOT_LIMITS_POLY_Y = {-0.31, -0.31, -0.15, 0.15, 0.31, 0.31};
 
 static const char *DEVICE_PATH = "/dev/input/js0";
 
+template <typename T> int sgn(T val) {
+    return (T(0) < val) - (val < T(0));
+}
+
+template <typename T>T clip(const T& n, const T& lower, const T& upper) {
+  return std::max(lower, std::min(n, upper));
+}
+
 bool finished_traj(array<double, 3> &cur, array<double, 4> &dest, array<double, 3> &delta)
 {
   /**
@@ -303,7 +311,8 @@ void sendState(std::array<double, 16> &ee_pose, int axis_x, int axis_y, int gs, 
   cout << "sent state" << endl;
   send(sock, cstr, strlen(cstr), 0); // send arm state to python.
 }
-void sendState(std::array<double, 16> &ee_pose, int axis_x, int axis_y, int gs, int rst, int start, int a_press, int b_press, int pp_is_valid, int sock)
+void sendState(std::array<double, 16> &ee_pose, int axis_x, int axis_y, int gs, int rst, int start, int a_press, int b_press, 
+              int gs_ret, int gs_at_ret, int zs, double zf, int sock)
 {
   std::string state = "s,";
   for (int i = 0; i < 16; i++)
@@ -325,7 +334,13 @@ void sendState(std::array<double, 16> &ee_pose, int axis_x, int axis_y, int gs, 
   state.append(",");
   state.append(std::to_string(b_press));
   state.append(",");
-  state.append(std::to_string(pp_is_valid));
+  state.append(std::to_string(gs_ret));
+  state.append(",");
+  state.append(std::to_string(gs_at_ret));
+  state.append(",");
+  state.append(std::to_string(zs));
+  state.append(",");
+  state.append(std::to_string(zf));
   char cstr[state.size() + 1];
   std::copy(state.begin(), state.end(), cstr);
   cstr[state.size()] = '\0';
@@ -536,6 +551,11 @@ int main(int argc, char **argv)
 
   // Connecting to the robot and resetting to home position
   orl::Robot robot("172.16.0.2");
+  robot.get_franka_robot().setCollisionBehavior(
+                            {{10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0}},
+                            {{50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0}},
+                            {{5.0, 5.0, 5.0, 5.0, 5.0, 5.0}},
+                            {{50.0, 50.0, 50.0, 50.0, 50.0, 50.0}});
   std::cout << "robot connected" << std::endl;
   int sock = connect2control(port);
 
@@ -567,6 +587,7 @@ int main(int argc, char **argv)
   array<double, 2> next_obj;
   int pickplace_is_valid = 1;
   int pickplace_valid_buffer = 1;
+  
 
   // -1: default open
   // 1: gripper closed
@@ -574,6 +595,10 @@ int main(int argc, char **argv)
   // 3: trying to release
   int gripper_state = -1;
   int gripper_state_buffer = -1; // Used to make sure grasp and release gripper states are always sent eventually.
+  int gripper_retval = -1; // Using -1 as null, 0 as fail, 1 as success
+  int gripper_state_at_ret = -1; // gripper_state at the time that gripper_retval is computed.
+
+  array<double, 2> grasp_at = {NAN, NAN};
 
   // 1: ready to start new point-to-point motion
   // 2: starting / speeding up new point-to-point motion
@@ -589,18 +614,29 @@ int main(int argc, char **argv)
   int rst = 1;
   int finished_rst_buffer = rst;
   bool reset_initiated = false;
+  // 0: move as normal
+  // 1: move up
+  // -1: move down
+  // 2: down movement finished
+  // 3: moving toward goal
+  int z_state = 0;
+  double z_contact = 0.0;
 
   // send state once at the beginning to initiate communication.
   // sendState(pose, 0, 0, gripper_state, sock);
   sendState(pose, 0, 0, gripper_state, 0, sock);
 
+  // Open gripper at start.
+  franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
+  robot.get_franka_gripper().move(gripper_read.max_width, 0.05);
   while (true)
   {
     time = 0.0;
     if (rst)
     {
+      cout << "Resetting to home position." << endl;
       std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-      robot.joint_motion(q_goal, 0.2);
+      robot.joint_motion(q_goal, 0.15);
       robot.absolute_cart_motion(0.3, -0.023, 0.08, 3);
       robot.get_franka_gripper().homing();
       franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
@@ -610,17 +646,21 @@ int main(int argc, char **argv)
       allow_movement = false;
     }
 
+
     // robot.get_franka_gripper().grasp(0.005, 0.03, 15, 0.01, 0.015); // if uncommented, grip something at the start
 
     cout << "Control loop starting" << endl;
     robot.get_franka_robot().control([=, &time, &state, &time_goal, &time_state, &last_grasp_time, &set_last_grasp_time,
                                       &reset_initiated, &allow_movement, &prev_start_bs, &prev_A_bs, &prev_B_bs,
                                       &a_press_buffer, &b_press_buffer, &start_press_buffer,
-                                      &pickplace_is_valid, &pickplace_valid_buffer,
+                                      &pickplace_is_valid, &pickplace_valid_buffer, &gripper_retval, &gripper_state_at_ret,
+                                      &grasp_at,
+                                      &z_state, &z_contact,
                                       &q, &delta, &prev_delta, &prev_accel, &next_delta, &delta_unit, &next_delta_unit, &next_obj, &gripper_state, &gripper_state_buffer,
                                       &goal, &next_goal, &pose, &cur_velocity, &gp, &tp, &rst, &finished_rst_buffer, &received_cmd](const franka::RobotState &robot_state,
                                                                                                                                     franka::Duration period) -> franka::CartesianVelocities
                                      {
+      bool send_finished = false;                                      
       double delta_t = period.toSec();
       time += period.toSec();
       time_goal += period.toSec();
@@ -636,6 +676,9 @@ int main(int argc, char **argv)
       int start_bs = gp->getButtonState(9);
       int A_bs = gp->getButtonState(1);
       int B_bs = gp->getButtonState(2);
+      int X_bs = gp->getButtonState(0);
+      int Y_bs = gp->getButtonState(3);
+      int RB_bs = gp->getButtonState(5);
       
       // cout << "bs all ";
       // for (int i=0; i<10; i++) {
@@ -692,7 +735,40 @@ int main(int argc, char **argv)
         for (int i = 0; i < 3; i++) {
           delta[i] = goal[i] - pose[12+i];
         }
+        if(X_bs == 1 && robot_state.cartesian_contact[2] == 0) {
+          delta[2] = 0.05;
+        }
+        if(Y_bs == 1 && robot_state.cartesian_contact[2] == 0) {
+          delta[2] = -0.05;
+        }
       }
+
+      // cout << "collision: ";
+      // for(int i=0; i<6; i++) {
+      //   cout << robot_state.cartesian_collision[i] << "|";
+      // }
+      // cout << endl;
+      // cout << "contact: ";
+      // for(int i=0; i<6; i++) {
+      //   cout << robot_state.cartesian_contact[i] << "|";
+      // }
+      // cout << endl;
+      // cout << "O_F: ";
+      // for(int i=0; i<6; i++) {
+      //   cout << robot_state.O_F_ext_hat_K[i] << "|";
+      // }
+      // cout << endl;
+      // // normally under 6N during free motion.
+      // double contact_force = sqrt(pow(robot_state.O_F_ext_hat_K[0], 2.0) + pow(robot_state.O_F_ext_hat_K[1], 2.0) + pow(robot_state.O_F_ext_hat_K[2], 2.0));
+      // cout << "force " << contact_force << endl;
+      // // cout << "K_F: ";
+      // // for(int i=0; i<6; i++) {
+      // //   cout << robot_state.K_F_ext_hat_K[i] << "|";
+      // // }
+      // // cout << endl;
+      
+      
+
       
       // Check if EE within range of goal
       // If so, set delta to 0.0
@@ -701,25 +777,89 @@ int main(int argc, char **argv)
       //   then return franka::MotionFinished(output)
       //   where output is zero.
 
-      bool goal_reached = ((time - last_grasp_time >= GRASP_COOLDOWN) && reached_object(cur, next_obj, GRASP_RADIUS));
-      if (goal_reached) {
+      // // Don't try to pick or place within 5mm of the safety polygon.
+      // std::array<double, 2> cur_xy = {cur[0], cur[1]};
+      // std::array<double, 2> cur_xy_projection = {0.0, 0.0};
+      // double cur_dist_to_polygon = project_onto_2D_polygon(cur_xy, &ROBOT_LIMITS_POLY_X[0], &ROBOT_LIMITS_POLY_Y[0], ROBOT_LIMITS_POLY_X.size(), cur_xy_projection);
+      // bool cur_is_in_bounds = is_within_2D_polygon(cur_xy, &ROBOT_LIMITS_POLY_X[0], &ROBOT_LIMITS_POLY_Y[0], ROBOT_LIMITS_POLY_X.size());
+      // if (!(cur_is_in_bounds && (cur_dist_to_polygon > 0.005))) {
+      //   last_grasp_time = time;
+      // }
+
+      //bool goal_reached = ((time - last_grasp_time >= GRASP_COOLDOWN) && reached_object(cur, next_obj, GRASP_RADIUS));
+      bool goal_reached = ((time - last_grasp_time >= GRASP_COOLDOWN) && (pickplace_is_valid == 1));
+      if (goal_reached && isnan(grasp_at[0])) {
+        grasp_at = next_obj;
+      }
+      // // For debugging only.
+      // if (RB_bs == 1) {
+      //   goal_reached = true;
+      //   next_obj = {cur[0], cur[1]};
+      // }
+
+      //cout << "grasp_at " << grasp_at[0] << ", " << grasp_at[1] << endl;
+      if (goal_reached && (z_state == 0 || z_state == 3)) {
+        //cout << "moving to grasp location" << endl;
         // Set desired speed to point toward target if xy is within GRASP_RADIUS
         if (gripper_state == 1) {
-          // delta[0] = 5.0*(next_obj[0] - cur[0]);
-          // delta[1] = 5.0*(next_obj[1] - cur[1]);
-          for (int i=0; i<3; ++i) {
-            delta[i] = 0.0;
-          }
+          double dx = next_obj[0] - cur[0];
+          double dy = next_obj[1] - cur[1];
+          double dz = -0.03 - cur[2];
+          double dr = sqrt(pow(dx, 2) + pow(dy, 2));
+          delta[0] = 8.0*clip(dr/0.010, 0.0, 1.0)*dx;
+          delta[1] = 8.0*clip(dr/0.010, 0.0, 1.0)*dy;
+          delta[2] = 0.0; //1.0*dz;
         } else if (gripper_state == -1) {
-          // delta[0] = 5.0*(next_obj[0] - cur[0]);
-          // delta[1] = 5.0*(next_obj[1] - cur[1]);
-          for (int i=0; i<3; ++i) {
-            delta[i] = 0.0;
-          }
+          double dx = next_obj[0] - cur[0];
+          double dy = next_obj[1] - cur[1];
+          double dz = -0.03 - cur[2];
+          double dr = sqrt(pow(dx, 2) + pow(dy, 2));
+          delta[0] = 8.0*clip(dr/0.010, 0.0, 1.0)*dx;
+          delta[1] = 8.0*clip(dr/0.010, 0.0, 1.0)*dy;
+          delta[2] = 0.0; //1.0*dz;
         } else {
           cout << "unknown gripper state for goal reached" << endl;
         }
+        z_state = 3;
       }
+      // cout << "force ";
+      // for(int i=0; i<6; i++) {
+      //   cout << robot_state.O_F_ext_hat_K[i] << ", ";
+      // }
+      // cout << endl;
+
+      //cout << "!z " << z_state << "," << z_contact << endl;
+      double z_force = robot_state.O_F_ext_hat_K[2];
+      if (z_state == -1) {
+        // Moving down after setting goal.
+        delta[0] = 0;
+        delta[1] = 0;
+        if (abs(z_force) >= 5.0) {
+          // Contact.
+          cout << "Contact!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
+          z_state = 1; // move up
+          z_contact = cur[2];
+        } else if (cur[2] < -0.065) {
+          delta[2] = 0.0;
+          z_state = 2; // stop moving down.
+        } else {
+          delta[2] = -0.04;
+        }
+      } else if (z_state == 1) {
+        delta[0] = 0;
+        delta[1] = 0;
+        delta[2] = (z_contact + 0.030) - cur[2];
+        if (cur[2] > z_contact + 0.025) {
+          z_state = 0;
+          last_grasp_time = time;
+          cout << "setting last grasp time" << endl;
+        }
+      } else if (z_state == 2) {
+        delta[0] = 0.0;
+        delta[1] = 0.0;
+        delta[2] = 0.0;
+      }
+      cout << "zz " << z_state << "," << z_contact << "," << goal_reached << endl;
 
       if (start_bs == 1 && prev_start_bs == 0) {
         allow_movement = (!allow_movement);
@@ -734,6 +874,10 @@ int main(int argc, char **argv)
           finished_rst_buffer = 0;
         }
         start_press_buffer = 1;
+      }
+      if (!allow_movement) {
+        // Used to enable the cooldown after enabling movement.
+        last_grasp_time = time;
       }
       prev_start_bs = start_bs; // must be after every reference to prev_start_bs
       int is_A_press = (A_bs==1)*(prev_A_bs==0);
@@ -759,6 +903,12 @@ int main(int argc, char **argv)
         reset_initiated = true;
       }
       if (reset_initiated) {
+        for (int i=0; i<3; ++i) {
+          delta[i] = 0.0;
+        }
+      }
+      // e.g.: timeout condition is reached from the python side.
+      if (pickplace_is_valid == -1) {
         for (int i=0; i<3; ++i) {
           delta[i] = 0.0;
         }
@@ -842,32 +992,34 @@ int main(int argc, char **argv)
 
 
 
+      //cout << "gr " << goal_reached << "," << l2_norm(last_translational_vel) << endl;
 
-
-
-      bool send_finished = false;
+      //cout << l2_norm(last_translational_vel) << endl;
+      // TODO: fix goal_reached condition.
       std::array<double, 6> zero_output = {0, 0, 0, 0, 0, 0};
-      if (l2_norm(last_translational_vel) <= 1.0e-4) {
+      if (l2_norm(last_translational_vel) <= 1.0e-6 && reset_initiated) {
         // i.e. is close to stopped
-        //cout << "############Robot is stopped or close to stopped!" << endl;
-        if (reset_initiated) {
-          cout << "Sending reset signal" << endl;
-          reset_initiated = false;
-          rst = 1;
-          //finished_rst_buffer = rst;
-          send_finished = true;
-        }
-      } else if (goal_reached && l2_norm(last_translational_vel) <= 0.7e-3) {
-        std::array<double, 6> zero_output = {0, 0, 0, 0, 0, 0};
-        cout << "Motion finished. Initiating grasp. " << gripper_state << endl;
-        if (gripper_state == -1) {
-          gripper_state = 2;
-          gripper_state_buffer = 2;
-        } else if (gripper_state == 1) {
-          gripper_state = 3;
-          gripper_state_buffer = 3;
-        }
+        cout << "Sending reset signal" << endl;
+        reset_initiated = false;
+        rst = 1;
+        //finished_rst_buffer = rst;
         send_finished = true;
+      } else if (goal_reached && l2_norm(last_translational_vel) <= 0.0007) {
+        std::array<double, 6> zero_output = {0, 0, 0, 0, 0, 0};
+        if (z_state == 2) {
+          cout << "Motion finished. Initiating grasp. " << gripper_state << endl;
+          cout << z_state << endl;
+          if (gripper_state == -1) {
+            gripper_state = 2;
+            gripper_state_buffer = 2;
+          } else if (gripper_state == 1) {
+            gripper_state = 3;
+            gripper_state_buffer = 3;
+          }
+          send_finished = true;
+        } else if (z_state == 3) {
+          z_state = -1;
+        }
       }
 
       // IMPORTANT:
@@ -907,67 +1059,90 @@ int main(int argc, char **argv)
         }
         //sendState(pose, axis_x, axis_y, gs_to_send, rst_to_send, sock);
         sendState(pose, axis_x, axis_y, gs_to_send, rst_to_send, start_press_to_send, a_press_to_send, b_press_to_send, 
-                  pickplace_is_valid, sock);
+                  gripper_retval, gripper_state_at_ret, z_state, z_force, sock);
+
+        // refresh some buffers
+        gripper_retval = -1;
       }
+
+      //cout << "next_obj " << next_obj[0] << ", " << next_obj[1] << endl;
 
       if (send_finished) {
         return franka::MotionFinished(zero_output);
       }
       //return output;
-      return limited_vel; });
+      return limited_vel; 
+    });
     cout << "Gripper state" << gripper_state << endl;
+    if (rst) {
+      if (gripper_state == 1) {
+        // Release if holding an object.
+        franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
+        robot.get_franka_gripper().move(gripper_read.max_width, 0.05);
+      }
+      gripper_state = -1; // Set state to not holding.
+    }
+
     // MISSING: feedback to python script if the grip is successful or not.
     if (gripper_state == 2)
     {
-      cout << "!!attempting gripper" << endl;
+      cout << "!!attempting gripper at " << next_obj[0] << ", " << next_obj[1] << endl;
       // original duration 1.2
-      robot.absolute_cart_motion(next_obj[0], next_obj[1], pose[14], 0.6);
-      if (pickplace_is_valid) {
-        robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.066, 1.8);
-      } else {
-        robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.066+0.0254, 1.8);
-      }
+      ////robot.absolute_cart_motion(next_obj[0], next_obj[1], pose[14], 0.6);
+      
+      //if (pickplace_is_valid) {
+      //  robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.066, 1.8);
+      //} else {
+      //  robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.066+0.0254, 1.8);
+      //}
+      cout << "a" << endl;
       double force = 18;
-      if (robot.get_franka_gripper().grasp(0.030, 0.03, force, 0.01, 0.015))
-      {
+      gripper_retval = robot.get_franka_gripper().grasp(0.030, 0.03, force, 0.01, 0.015);
+      gripper_state_at_ret = 2;
+      if (gripper_retval) {
         gripper_state = 1;
         cout << "Object Grasped" << endl;
-      }
-      else
-      {
+      } else {
         gripper_state = -1;
         franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
         cout << "MAX gripper width is: " << gripper_read.max_width << endl;
         cout << "Object unable to be Grasped" << endl;
         robot.get_franka_gripper().move(gripper_read.max_width, 0.05);
       }
+      cout << "b" << endl;
       // original duration 2.5
-      robot.absolute_cart_motion(next_obj[0], next_obj[1], 0.08, 3.0);
+      //robot.absolute_cart_motion(next_obj[0], next_obj[1], 0.08, 3.0);
+      robot.absolute_cart_motion(next_obj[0], next_obj[1], 0.03, 1.5);
       set_last_grasp_time = true;
+      cout << "c" << endl;
     }
     else if (gripper_state == 3)
     {
       // original z -0.065
-      robot.absolute_cart_motion(next_obj[0], next_obj[1], pose[14], 0.6);
-      if (pickplace_is_valid) {
-        robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.065, 1.8);
-      } else {
-        robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.065+1.3*0.0254, 1.8);
-      }
+      ////robot.absolute_cart_motion(next_obj[0], next_obj[1], pose[14], 0.6);
+      //if (pickplace_is_valid) {
+      //  robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.065, 1.8);
+      //} else {
+      //  robot.absolute_cart_motion(next_obj[0], next_obj[1], -0.065+1.3*0.0254, 1.8);
+      //}
       franka::GripperState gripper_read = robot.get_franka_gripper().readOnce();
-      if (pickplace_is_valid && robot.get_franka_gripper().move(gripper_read.max_width, 0.05))
-      {
+      gripper_retval = robot.get_franka_gripper().move(gripper_read.max_width, 0.05);
+      gripper_state_at_ret = 3;
+      if (gripper_retval) {
         gripper_state = -1;
         cout << "Object Released" << endl;
-      }
-      else
-      {
+      } else {
         gripper_state = 1;
         cout << "Object unable to be Released" << endl;
       }
-      robot.absolute_cart_motion(next_obj[0], next_obj[1], 0.08, 3.0);
+      //robot.absolute_cart_motion(next_obj[0], next_obj[1], 0.08, 3.0);
+      robot.absolute_cart_motion(next_obj[0], next_obj[1], 0.03, 1.5);
       set_last_grasp_time = true;
     }
+    cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Resetting z_state" << endl;
+    z_state = 0;
+    cout << "gret" << gripper_retval << endl;
+    grasp_at = {NAN, NAN};
   }
   tp->shutdown();
 
